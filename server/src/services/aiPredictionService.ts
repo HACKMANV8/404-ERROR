@@ -1,17 +1,23 @@
 import { WeatherService } from './weatherService.js';
 import { SatelliteService } from './satelliteService.js';
 import { SocialMediaService } from './socialMediaService.js';
+import { EarthquakeService } from './earthquakeService.js';
+import { FloodService } from './floodService.js';
 import type { Region, AIMetric, WeatherData } from '../types/index.js';
 
 export class AIPredictionService {
   private weatherService: WeatherService;
   private satelliteService: SatelliteService;
   private socialMediaService: SocialMediaService;
+  private earthquakeService: EarthquakeService;
+  private floodService: FloodService;
 
   constructor() {
     this.weatherService = new WeatherService();
     this.satelliteService = new SatelliteService();
     this.socialMediaService = new SocialMediaService();
+    this.earthquakeService = new EarthquakeService();
+    this.floodService = new FloodService();
   }
 
   /**
@@ -56,14 +62,32 @@ export class AIPredictionService {
     // 3. Analyze social media sentiment (NLP models: Sentiment Analysis, LSTM, BERT)
     const socialData = await this.socialMediaService.analyzeSocialMediaSentiment(region.name);
 
-    // 4. Calculate overall severity using weighted combination
+    // 4. Get earthquake risk (USGS Earthquake API - for Himalayan zones)
+    const earthquakeRisk = await this.earthquakeService.getEarthquakeRisk(
+      region.lat,
+      region.lon,
+      500 // 500km radius for India coverage
+    );
+
+    // 5. Get flood risk (Flood API - for flood-prone regions)
+    const floodRisk = await this.floodService.getFloodRisk(
+      region.lat,
+      region.lon,
+      weatherData.rainfall, // Use rainfall for flood risk calculation
+      50, // 50km radius for flood monitoring
+      region.name // Pass region name to identify flood-prone areas
+    );
+
+    // 6. Calculate overall severity using weighted combination
     const overallSeverity = this.calculateOverallSeverity(
       weatherSeverity,
       satelliteData.damageScore,
-      socialData.urgencyScore
+      socialData.urgencyScore,
+      earthquakeRisk.riskScore,
+      floodRisk.riskScore
     );
 
-    // 5. Estimate aid needed (ML models: Decision Tree, Regression)
+    // 7. Estimate aid needed (ML models: Decision Tree, Regression)
     const estimatedAid = this.estimateAidNeeded(overallSeverity, region.population);
 
     return {
@@ -72,6 +96,18 @@ export class AIPredictionService {
       weatherData,
       satelliteDamage: satelliteData.damageScore,
       socialUrgency: socialData.urgencyScore,
+      earthquakeRisk: {
+        riskScore: earthquakeRisk.riskScore,
+        recentCount: earthquakeRisk.recentCount,
+        maxMagnitude: earthquakeRisk.maxMagnitude,
+        lastEvent: earthquakeRisk.lastEvent,
+      },
+      floodRisk: {
+        riskScore: floodRisk.riskScore,
+        floodExtent: floodRisk.floodExtent,
+        waterLevel: floodRisk.waterLevel,
+        isActive: floodRisk.isActive,
+      },
       aid: estimatedAid,
       status: this.getSeverityStatus(overallSeverity),
     };
@@ -84,19 +120,66 @@ export class AIPredictionService {
   private calculateOverallSeverity(
     weatherSeverity: number,
     satelliteDamage: number,
-    socialUrgency: number
+    socialUrgency: number,
+    earthquakeRisk: number,
+    floodRisk: number
   ): number {
     // Weighted combination (tuned like Random Forest/XGBoost)
+    // Earthquake and flood risks are added conditionally - only if significant
     const weights = {
-      weather: 0.4, // Weather is most important for prediction
-      satellite: 0.4, // Satellite imagery shows actual damage
-      social: 0.2, // Social media provides urgency indicator
+      weather: 0.30, // Weather is important for prediction
+      satellite: 0.30, // Satellite imagery shows actual damage
+      social: 0.12, // Social media provides urgency indicator
+      earthquake: 0.12, // Earthquake risk for seismic zones
+      flood: 0.16, // Flood risk for flood-prone zones
     };
 
+    // Only include earthquake risk if it's significant (>= 20)
+    const effectiveEarthquakeRisk = earthquakeRisk >= 20 ? earthquakeRisk : 0;
+    
+    // Only include flood risk if it's significant (>= 20)
+    const effectiveFloodRisk = floodRisk >= 20 ? floodRisk : 0;
+    
+    // Adjust weights dynamically based on which risks are active
+    let effectiveWeights;
+    if (effectiveEarthquakeRisk > 0 && effectiveFloodRisk > 0) {
+      // Both risks active
+      effectiveWeights = weights;
+    } else if (effectiveEarthquakeRisk > 0) {
+      // Only earthquake risk
+      effectiveWeights = {
+        weather: 0.35,
+        satellite: 0.35,
+        social: 0.15,
+        earthquake: 0.15,
+        flood: 0,
+      };
+    } else if (effectiveFloodRisk > 0) {
+      // Only flood risk
+      effectiveWeights = {
+        weather: 0.30,
+        satellite: 0.30,
+        social: 0.14,
+        earthquake: 0,
+        flood: 0.26,
+      };
+    } else {
+      // No special risks
+      effectiveWeights = {
+        weather: 0.40,
+        satellite: 0.40,
+        social: 0.20,
+        earthquake: 0,
+        flood: 0,
+      };
+    }
+
     return (
-      weatherSeverity * weights.weather +
-      satelliteDamage * weights.satellite +
-      socialUrgency * weights.social
+      weatherSeverity * effectiveWeights.weather +
+      satelliteDamage * effectiveWeights.satellite +
+      socialUrgency * effectiveWeights.social +
+      effectiveEarthquakeRisk * effectiveWeights.earthquake +
+      effectiveFloodRisk * effectiveWeights.flood
     );
   }
 
@@ -137,6 +220,12 @@ export class AIPredictionService {
     const avgSocialUrgency =
       regions.reduce((sum, r) => sum + (r.socialUrgency || 0), 0) / regions.length;
 
+    const avgEarthquakeRisk =
+      regions.reduce((sum, r) => sum + (r.earthquakeRisk?.riskScore || 0), 0) / regions.length;
+
+    const avgFloodRisk =
+      regions.reduce((sum, r) => sum + (r.floodRisk?.riskScore || 0), 0) / regions.length;
+
     return [
       {
         name: 'Weather Severity',
@@ -156,6 +245,20 @@ export class AIPredictionService {
         name: 'Social Urgency',
         value: Math.round(avgSocialUrgency),
         status: this.getStatusFromValue(avgSocialUrgency),
+        trend: Math.round(Math.random() * 10 - 5),
+        lastUpdated: new Date().toISOString(),
+      },
+      {
+        name: 'Earthquake Risk',
+        value: Math.round(avgEarthquakeRisk),
+        status: this.getStatusFromValue(avgEarthquakeRisk),
+        trend: Math.round(Math.random() * 10 - 5),
+        lastUpdated: new Date().toISOString(),
+      },
+      {
+        name: 'Flood Risk',
+        value: Math.round(avgFloodRisk),
+        status: this.getStatusFromValue(avgFloodRisk),
         trend: Math.round(Math.random() * 10 - 5),
         lastUpdated: new Date().toISOString(),
       },

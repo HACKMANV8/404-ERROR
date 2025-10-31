@@ -6,6 +6,20 @@ export interface AIMetric {
   lastUpdated: string;
 }
 
+export interface EarthquakeRisk {
+  riskScore: number;
+  recentCount: number;
+  maxMagnitude: number;
+  lastEvent: string | null;
+}
+
+export interface FloodRisk {
+  riskScore: number;
+  floodExtent: number;
+  waterLevel: number;
+  isActive: boolean;
+}
+
 export interface Region {
   id: string;
   name: string;
@@ -18,6 +32,8 @@ export interface Region {
   weatherData?: WeatherData;
   satelliteDamage?: number;
   socialUrgency?: number;
+  earthquakeRisk?: EarthquakeRisk;
+  floodRisk?: FloodRisk;
   demographicData?: {
     populationDensity: number;
     hospitals: number;

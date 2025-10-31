@@ -57,4 +57,30 @@ export const DISASTER_REGIONS: Omit<Region, 'severity' | 'aid' | 'status' | 'wea
       elevation: 32,
     },
   },
+  {
+    id: 'E',
+    name: 'Uttarakhand Himalayas',
+    lat: 30.0668,
+    lon: 79.0193,
+    population: '1.2M',
+    demographicData: {
+      populationDensity: 189,
+      hospitals: 28,
+      roads: 520,
+      elevation: 1350, // High elevation - earthquake/landslide prone
+    },
+  },
+  {
+    id: 'F',
+    name: 'Himachal Pradesh',
+    lat: 31.1048,
+    lon: 77.1734,
+    population: '850K',
+    demographicData: {
+      populationDensity: 123,
+      hospitals: 22,
+      roads: 380,
+      elevation: 2200, // High elevation - seismic zone
+    },
+  },
 ];

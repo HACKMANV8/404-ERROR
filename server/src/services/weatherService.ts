@@ -18,28 +18,55 @@ export class WeatherService {
         return this.getSimulatedWeatherData(lat, lon);
       }
 
-      const response = await axios.get(`${OPENWEATHER_BASE_URL}/weather`, {
-        params: {
-          lat,
-          lon,
-          appid: apiKey,
-          units: 'metric',
-        },
-        timeout: 5000,
-      });
+      // Get both current weather AND forecast for better rainfall data
+      const [currentResponse, forecastResponse] = await Promise.all([
+        axios.get(`${OPENWEATHER_BASE_URL}/weather`, {
+          params: {
+            lat,
+            lon,
+            appid: apiKey,
+            units: 'metric',
+          },
+          timeout: 5000,
+        }),
+        axios.get(`${OPENWEATHER_BASE_URL}/forecast`, {
+          params: {
+            lat,
+            lon,
+            appid: apiKey,
+            units: 'metric',
+            cnt: 5, // Get next 5 forecast periods (next ~12 hours)
+          },
+          timeout: 5000,
+        }),
+      ]);
 
-      const data = response.data;
+      const currentData = currentResponse.data;
+      
+      // Calculate total rainfall from forecast (next 12-24 hours)
+      let forecastRainfall = 0;
+      if (forecastResponse.data && forecastResponse.data.list) {
+        forecastRainfall = forecastResponse.data.list.reduce((sum: number, item: any) => {
+          return sum + (item.rain?.['3h'] || item.rain?.['1h'] || 0);
+        }, 0);
+      }
+      
+      // Use current hour rainfall OR forecast rainfall (whichever is higher)
+      const currentRainfall = currentData.rain?.['1h'] || 0;
+      const totalRainfall = Math.max(currentRainfall, forecastRainfall);
+      
       const weatherData = {
-        temperature: Math.round(data.main.temp),
-        humidity: data.main.humidity,
-        windSpeed: Math.round(data.wind?.speed || 0 * 3.6), // Convert m/s to km/h
-        rainfall: data.rain?.['1h'] || 0,
-        pressure: Math.round(data.main.pressure),
-        conditions: data.weather[0].main,
+        temperature: Math.round(currentData.main.temp),
+        humidity: currentData.main.humidity,
+        windSpeed: Math.round((currentData.wind?.speed || 0) * 3.6), // Convert m/s to km/h
+        rainfall: Math.round(totalRainfall * 10) / 10, // Round to 1 decimal
+        pressure: Math.round(currentData.main.pressure),
+        conditions: currentData.weather[0].main,
         timestamp: new Date().toISOString(),
       };
       
-      console.log(`[Weather] ✅ Using REAL data - ${data.weather[0].main}, Temp: ${weatherData.temperature}°C, Rain: ${weatherData.rainfall}mm`);
+      const rainfallSource = forecastRainfall > currentRainfall ? 'forecast' : 'current';
+      console.log(`[Weather] ✅ Using REAL data - ${currentData.weather[0].main}, Temp: ${weatherData.temperature}°C, Rain: ${weatherData.rainfall}mm (${rainfallSource})`);
       return weatherData;
     } catch (error: any) {
       // Handle API errors gracefully

@@ -10,8 +10,12 @@ import type { SatelliteData } from '../types/index.js';
  * Try both standard Planet API and Insights-specific endpoints
  */
 export class PlanetService {
+  // Standard Planet Data API
   private readonly PLANET_BASE_URL = 'https://api.planet.com';
-  private readonly PLANET_INSIGHTS_BASE_URL = 'https://api.planet.com'; // Try same base first
+  // Planet Insights Platform uses SentinelHub auth realm for M2M clients
+  private readonly PLANET_INSIGHTS_AUTH_ENDPOINT = 'https://services.sentinel-hub.com/auth/realms/main/protocol/openid-connect/token';
+  // Fallback: Standard Planet API endpoint (for regular Planet API accounts)
+  private readonly PLANET_STANDARD_AUTH_ENDPOINT = 'https://api.planet.com/auth/v1/oauth2/token';
   private clientId: string;
   private clientSecret: string;
   private accessToken: string | null = null;
@@ -36,62 +40,76 @@ export class PlanetService {
     }
 
     try {
-      // Planet uses Basic Auth for token exchange
+      // Planet Insights Platform uses SentinelHub auth realm for M2M clients
+      // Try Planet Insights Platform endpoint first (for credentials from insights.planet.com)
       const credentials = Buffer.from(`${this.clientId}:${this.clientSecret}`).toString('base64');
       
-      // Try standard Planet API authentication endpoint
-      let response;
+      // Try Planet Insights Platform authentication endpoint (M2M client)
       try {
-        response = await axios.post(
-          `${this.PLANET_BASE_URL}/auth/v1/oauth2/token`,
-          'grant_type=client_credentials',
+        console.log(`[Planet] Trying Planet Insights Platform auth endpoint...`);
+        const response = await axios.post(
+          this.PLANET_INSIGHTS_AUTH_ENDPOINT,
+          new URLSearchParams({
+            grant_type: 'client_credentials',
+            client_id: this.clientId,
+            client_secret: this.clientSecret,
+          }).toString(),
           {
             headers: {
-              'Authorization': `Basic ${credentials}`,
               'Content-Type': 'application/x-www-form-urlencoded',
             },
             timeout: 10000,
           }
         );
-      } catch (firstError: any) {
-        // If standard endpoint fails, try alternative approaches for Planet Insights
-        if (firstError.response?.status === 404 || firstError.response?.status === 401) {
-          // Try alternative: Direct API key authentication (silently)
-          try {
-            const apiKeyResponse = await axios.get(
-              `${this.PLANET_BASE_URL}/data/v1/item-types`,
-              {
-                headers: {
-                  'Authorization': `api-key ${this.clientId}`,
-                },
-                timeout: 5000,
-              }
-            );
-            // If this works, use clientId as API key
-            this.accessToken = this.clientId;
-            this.tokenExpiry = Date.now() + 3600000;
-            return this.accessToken;
-          } catch (altError: any) {
-            // Both methods failed - Planet Insights uses different API structure
-            // Silently fail - NASA FIRMS will handle satellite data
-            throw firstError;
-          }
+        
+        // Success! Store token and return
+        this.accessToken = response.data.access_token;
+        const expiresIn = response.data.expires_in || 3600;
+        this.tokenExpiry = Date.now() + (expiresIn - 300) * 1000;
+        
+        if (!this.accessToken) {
+          throw new Error('Failed to get access token');
         }
-        throw firstError;
+        
+        console.log(`[Planet] ✅ Planet Insights Platform authentication successful (token expires in ${expiresIn}s)`);
+        return this.accessToken;
+      } catch (insightsError: any) {
+        const status = insightsError.response?.status;
+        console.log(`[Planet] Planet Insights Platform auth returned ${status || insightsError.message}`);
+        
+        // Fallback to standard Planet API endpoint (for regular Planet API accounts)
+        console.log(`[Planet] Trying standard Planet API auth endpoint...`);
+        try {
+          const response = await axios.post(
+            this.PLANET_STANDARD_AUTH_ENDPOINT,
+            'grant_type=client_credentials',
+            {
+              headers: {
+                'Authorization': `Basic ${credentials}`,
+                'Content-Type': 'application/x-www-form-urlencoded',
+              },
+              timeout: 10000,
+            }
+          );
+          
+          this.accessToken = response.data.access_token;
+          const expiresIn = response.data.expires_in || 3600;
+          this.tokenExpiry = Date.now() + (expiresIn - 300) * 1000;
+          
+          if (!this.accessToken) {
+            throw new Error('Failed to get access token');
+          }
+          
+          console.log(`[Planet] ✅ Standard Planet API authentication successful (token expires in ${expiresIn}s)`);
+          return this.accessToken;
+        } catch (standardError: any) {
+          console.log(`[Planet] Standard Planet API auth also failed (${standardError.response?.status || standardError.message})`);
+          // Both methods failed
+          throw insightsError;
+        }
       }
-
-      this.accessToken = response.data.access_token;
-      // Token expires in ~1 hour, refresh 5 minutes early
-      this.tokenExpiry = Date.now() + (response.data.expires_in - 300) * 1000;
-
-      if (!this.accessToken) {
-        throw new Error('Failed to get access token');
-      }
-
-      return this.accessToken;
     } catch (error: any) {
-      // Planet Insights uses different API structure - silently handle all errors
-      // No logging - this is expected behavior
+      // Re-throw to let caller handle (searchImagery will log and fallback)
       throw error;
     }
   }
@@ -118,10 +136,11 @@ export class PlanetService {
       let token: string;
       try {
         token = await this.authenticate();
-        console.log(`[Planet] ✅ Authentication successful`);
+        // Authentication success is logged in authenticate() method
       } catch (authError: any) {
-        // Planet Insights uses different API structure - silently fall back
-        // NASA FIRMS handles satellite fire detection (free & working)
+        // Authentication failed - credentials may be for Planet Insights Platform which uses different endpoints
+        // NASA FIRMS handles satellite fire detection (free & working) as fallback
+        console.log(`[Planet] Authentication failed - using NASA FIRMS fallback`);
         return this.getSimulatedImagery();
       }
 
@@ -164,9 +183,12 @@ export class PlanetService {
         },
       };
 
-      // Try standard Bearer token auth first
+      // Try standard Planet Data API search endpoint
+      // Note: Planet Insights Platform credentials may only work with Platform APIs (Analytics, Processing)
+      // Data API may require separate API key or different credentials
       let response;
       try {
+        // Try POST method first (standard Planet Data API)
         response = await axios.post(
           `${this.PLANET_BASE_URL}/data/v1/searches/quick`,
           searchRequest,
@@ -178,9 +200,20 @@ export class PlanetService {
             timeout: 30000,
           }
         );
+        console.log(`[Planet] ✅ Data API search successful`);
       } catch (apiError: any) {
-        // If Bearer token fails, try API key auth (if token is actually an API key)
-        if (apiError.response?.status === 401 && token === this.clientId) {
+        const status = apiError.response?.status;
+        
+        // If 405 (Method Not Allowed) or 403 (Forbidden), Platform credentials may not have Data API access
+        if (status === 405 || status === 403) {
+          console.log(`[Planet] Data API not accessible with Platform credentials (${status}) - Platform credentials are for Analytics/Processing APIs, not Data API`);
+          console.log(`[Planet] Using NASA FIRMS for satellite detection (free & working)`);
+          // Gracefully fall back - Platform credentials work but don't grant Data API access
+          return this.getSimulatedImagery();
+        }
+        
+        // If 401, try API key auth (unlikely but possible)
+        if (status === 401 && token === this.clientId) {
           try {
             response = await axios.post(
               `${this.PLANET_BASE_URL}/data/v1/searches/quick`,
@@ -232,12 +265,22 @@ export class PlanetService {
         damageIndicators,
       };
     } catch (error: any) {
-      // Planet Insights uses different API structure - silently fall back
-      // Only log if it's NOT a 404 (404 is expected and handled silently)
-      if (error.response?.status && error.response.status !== 404) {
-        console.log(`[Planet] Error (${error.response.status}): ${error.message || 'Unknown'}`);
+      // Log error details for debugging Planet Insights Platform integration
+      const status = error.response?.status;
+      const statusText = error.response?.statusText;
+      
+      // Only log errors that weren't already handled (405/403 are handled above)
+      if (status === 404) {
+        console.log(`[Planet] Search endpoint not found (404)`);
+      } else if (status && status !== 405 && status !== 403) {
+        // Log other errors (401, 500, etc.) but not 405/403 which are handled above
+        console.log(`[Planet] Search API error (${status} ${statusText}): ${error.message || 'Unknown error'}`);
+      } else if (!status) {
+        // Network errors, timeouts, etc.
+        console.log(`[Planet] Search error: ${error.message || 'Unknown error'}`);
       }
-      // Silently return simulated data - NASA FIRMS provides real fire detection
+      
+      // Return simulated data - NASA FIRMS provides real fire detection as fallback
       return this.getSimulatedImagery();
     }
   }
