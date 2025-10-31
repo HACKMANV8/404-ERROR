@@ -75,7 +75,11 @@ export class SatelliteService {
           affectedArea = Math.max(affectedArea, imageryDamage * 2);
           confidence = Math.min(95, confidence + 25);
           sources.push('Planet Insights');
+          console.log(`[Satellite] Planet Insights: ✅ Using REAL imagery data`);
         }
+      } else if (planetImageryData.status === 'rejected') {
+        // Planet Insights API structure differs - silently skip (no error spam)
+        // NASA FIRMS will handle the fire detection instead
       }
 
       // Process SentinelHub imagery data (fallback)

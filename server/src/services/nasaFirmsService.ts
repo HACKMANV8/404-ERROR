@@ -105,13 +105,17 @@ export class NASAFirmsService {
       // Can estimate floods from weather data + absence of fires in flood-prone areas
       const floodCount = 0;
 
+      if (events.length > 0) {
+        console.log(`[NASA FIRMS] Found ${events.length} fire events`);
+      }
+      
       return {
         fireCount: events.length,
         floodCount,
         events: events.slice(0, 50), // Limit to 50 most recent
       };
     } catch (error: any) {
-      console.error('Error fetching NASA FIRMS data:', error.message || error);
+      console.error('[NASA FIRMS] Error:', error.message || error);
       // Return empty data on error - system will use fallback
       return {
         fireCount: 0,

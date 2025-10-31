@@ -1,7 +1,6 @@
 import axios from 'axios';
 import type { WeatherData } from '../types/index.js';
 
-const OPENWEATHER_API_KEY = process.env.OPENWEATHER_API_KEY || '';
 const OPENWEATHER_BASE_URL = 'https://api.openweathermap.org/data/2.5';
 
 export class WeatherService {
@@ -10,7 +9,11 @@ export class WeatherService {
    */
   async getWeatherData(lat: number, lon: number): Promise<WeatherData> {
     try {
-      if (!OPENWEATHER_API_KEY || OPENWEATHER_API_KEY === 'your_openweather_api_key_here') {
+      // Read API key from environment at runtime (after dotenv has loaded)
+      const apiKey = (process.env.OPENWEATHER_API_KEY || '').trim();
+      
+      if (!apiKey || apiKey === '' || apiKey === 'your_openweather_api_key_here') {
+        console.log('[Weather] API key not configured, using simulated data');
         // Fallback to simulated data if API key not provided
         return this.getSimulatedWeatherData(lat, lon);
       }
@@ -19,14 +22,14 @@ export class WeatherService {
         params: {
           lat,
           lon,
-          appid: OPENWEATHER_API_KEY,
+          appid: apiKey,
           units: 'metric',
         },
         timeout: 5000,
       });
 
       const data = response.data;
-      return {
+      const weatherData = {
         temperature: Math.round(data.main.temp),
         humidity: data.main.humidity,
         windSpeed: Math.round(data.wind?.speed || 0 * 3.6), // Convert m/s to km/h
@@ -35,8 +38,16 @@ export class WeatherService {
         conditions: data.weather[0].main,
         timestamp: new Date().toISOString(),
       };
-    } catch (error) {
-      console.error('Error fetching weather data:', error);
+      
+      console.log(`[Weather] ✅ Using REAL data - ${data.weather[0].main}, Temp: ${weatherData.temperature}°C, Rain: ${weatherData.rainfall}mm`);
+      return weatherData;
+    } catch (error: any) {
+      // Handle API errors gracefully
+      if (error.response?.status === 401) {
+        console.error(`[Weather] API key invalid (401) - Check your OpenWeatherMap API key`);
+      } else {
+        console.error(`[Weather] Error: ${error.message || error} - Using simulated data`);
+      }
       // Return simulated data on error
       return this.getSimulatedWeatherData(lat, lon);
     }
