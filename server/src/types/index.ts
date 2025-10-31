@@ -20,6 +20,29 @@ export interface FloodRisk {
   isActive: boolean;
 }
 
+export interface CycloneRisk {
+  riskScore: number;
+  windSpeed: number;
+  pressure: number;
+  cycloneCategory: 'Depression' | 'Deep Depression' | 'Cyclonic Storm' | 'Severe Cyclonic Storm' | 'Very Severe Cyclonic Storm' | 'Extremely Severe Cyclonic Storm' | 'Super Cyclonic Storm' | 'None';
+  isActive: boolean;
+  lastUpdate: string;
+}
+
+export interface DroughtHeatwaveRisk {
+  droughtRisk: number;
+  heatwaveRisk: number;
+  combinedRisk: number;
+  temperature: number;
+  humidity: number;
+  rainfallDeficit: number;
+  heatwaveCategory: 'Normal' | 'Heat Wave' | 'Severe Heat Wave' | 'Extreme Heat Wave' | 'None';
+  droughtSeverity: 'Normal' | 'Mild' | 'Moderate' | 'Severe' | 'Extreme';
+  isHeatwaveActive: boolean;
+  isDroughtActive: boolean;
+  lastUpdate: string;
+}
+
 export interface Region {
   id: string;
   name: string;
@@ -34,6 +57,8 @@ export interface Region {
   socialUrgency?: number;
   earthquakeRisk?: EarthquakeRisk;
   floodRisk?: FloodRisk;
+  cycloneRisk?: CycloneRisk;
+  droughtHeatwaveRisk?: DroughtHeatwaveRisk;
   demographicData?: {
     populationDensity: number;
     hospitals: number;

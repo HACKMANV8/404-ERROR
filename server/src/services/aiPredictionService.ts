@@ -3,6 +3,8 @@ import { SatelliteService } from './satelliteService.js';
 import { SocialMediaService } from './socialMediaService.js';
 import { EarthquakeService } from './earthquakeService.js';
 import { FloodService } from './floodService.js';
+import { CycloneService } from './cycloneService.js';
+import { DroughtHeatwaveService } from './droughtHeatwaveService.js';
 import type { Region, AIMetric, WeatherData } from '../types/index.js';
 
 export class AIPredictionService {
@@ -11,6 +13,8 @@ export class AIPredictionService {
   private socialMediaService: SocialMediaService;
   private earthquakeService: EarthquakeService;
   private floodService: FloodService;
+  private cycloneService: CycloneService;
+  private droughtHeatwaveService: DroughtHeatwaveService;
 
   constructor() {
     this.weatherService = new WeatherService();
@@ -18,6 +22,8 @@ export class AIPredictionService {
     this.socialMediaService = new SocialMediaService();
     this.earthquakeService = new EarthquakeService();
     this.floodService = new FloodService();
+    this.cycloneService = new CycloneService();
+    this.droughtHeatwaveService = new DroughtHeatwaveService();
   }
 
   /**
@@ -78,16 +84,34 @@ export class AIPredictionService {
       region.name // Pass region name to identify flood-prone areas
     );
 
-    // 6. Calculate overall severity using weighted combination
+    // 6. Get cyclone risk (Cyclone API - for coastal cyclone-prone regions)
+    const cycloneRisk = await this.cycloneService.getCycloneRisk(
+      weatherData,
+      region.lat,
+      region.lon,
+      region.name
+    );
+
+    // 7. Get drought/heatwave risk (Drought/Heatwave API - for drought-prone regions)
+    const droughtHeatwaveRisk = await this.droughtHeatwaveService.getDroughtHeatwaveRisk(
+      weatherData,
+      region.lat,
+      region.lon,
+      region.name
+    );
+
+    // 8. Calculate overall severity using weighted combination
     const overallSeverity = this.calculateOverallSeverity(
       weatherSeverity,
       satelliteData.damageScore,
       socialData.urgencyScore,
       earthquakeRisk.riskScore,
-      floodRisk.riskScore
+      floodRisk.riskScore,
+      cycloneRisk.riskScore,
+      droughtHeatwaveRisk.combinedRisk
     );
 
-    // 7. Estimate aid needed (ML models: Decision Tree, Regression)
+    // 9. Estimate aid needed (ML models: Decision Tree, Regression)
     const estimatedAid = this.estimateAidNeeded(overallSeverity, region.population);
 
     return {
@@ -108,6 +132,27 @@ export class AIPredictionService {
         waterLevel: floodRisk.waterLevel,
         isActive: floodRisk.isActive,
       },
+      cycloneRisk: {
+        riskScore: cycloneRisk.riskScore,
+        windSpeed: cycloneRisk.windSpeed,
+        pressure: cycloneRisk.pressure,
+        cycloneCategory: cycloneRisk.cycloneCategory,
+        isActive: cycloneRisk.isActive,
+        lastUpdate: cycloneRisk.lastUpdate,
+      },
+      droughtHeatwaveRisk: {
+        droughtRisk: droughtHeatwaveRisk.droughtRisk,
+        heatwaveRisk: droughtHeatwaveRisk.heatwaveRisk,
+        combinedRisk: droughtHeatwaveRisk.combinedRisk,
+        temperature: droughtHeatwaveRisk.temperature,
+        humidity: droughtHeatwaveRisk.humidity,
+        rainfallDeficit: droughtHeatwaveRisk.rainfallDeficit,
+        heatwaveCategory: droughtHeatwaveRisk.heatwaveCategory,
+        droughtSeverity: droughtHeatwaveRisk.droughtSeverity,
+        isHeatwaveActive: droughtHeatwaveRisk.isHeatwaveActive,
+        isDroughtActive: droughtHeatwaveRisk.isDroughtActive,
+        lastUpdate: droughtHeatwaveRisk.lastUpdate,
+      },
       aid: estimatedAid,
       status: this.getSeverityStatus(overallSeverity),
     };
@@ -122,64 +167,61 @@ export class AIPredictionService {
     satelliteDamage: number,
     socialUrgency: number,
     earthquakeRisk: number,
-    floodRisk: number
+    floodRisk: number,
+    cycloneRisk: number,
+    droughtHeatwaveRisk: number
   ): number {
     // Weighted combination (tuned like Random Forest/XGBoost)
-    // Earthquake and flood risks are added conditionally - only if significant
-    const weights = {
-      weather: 0.30, // Weather is important for prediction
-      satellite: 0.30, // Satellite imagery shows actual damage
-      social: 0.12, // Social media provides urgency indicator
-      earthquake: 0.12, // Earthquake risk for seismic zones
-      flood: 0.16, // Flood risk for flood-prone zones
-    };
-
-    // Only include earthquake risk if it's significant (>= 20)
+    // Special risks are added conditionally - only if significant (>= 20)
     const effectiveEarthquakeRisk = earthquakeRisk >= 20 ? earthquakeRisk : 0;
-    
-    // Only include flood risk if it's significant (>= 20)
     const effectiveFloodRisk = floodRisk >= 20 ? floodRisk : 0;
+    const effectiveCycloneRisk = cycloneRisk >= 20 ? cycloneRisk : 0;
+    const effectiveDroughtHeatwaveRisk = droughtHeatwaveRisk >= 20 ? droughtHeatwaveRisk : 0;
     
-    // Adjust weights dynamically based on which risks are active
-    let effectiveWeights;
-    if (effectiveEarthquakeRisk > 0 && effectiveFloodRisk > 0) {
-      // Both risks active
-      effectiveWeights = weights;
-    } else if (effectiveEarthquakeRisk > 0) {
-      // Only earthquake risk
-      effectiveWeights = {
-        weather: 0.35,
-        satellite: 0.35,
-        social: 0.15,
-        earthquake: 0.15,
-        flood: 0,
-      };
-    } else if (effectiveFloodRisk > 0) {
-      // Only flood risk
-      effectiveWeights = {
-        weather: 0.30,
-        satellite: 0.30,
-        social: 0.14,
-        earthquake: 0,
-        flood: 0.26,
-      };
-    } else {
-      // No special risks
-      effectiveWeights = {
-        weather: 0.40,
-        satellite: 0.40,
-        social: 0.20,
-        earthquake: 0,
-        flood: 0,
-      };
+    // Count how many special risks are active
+    const activeRisks = [
+      effectiveEarthquakeRisk > 0,
+      effectiveFloodRisk > 0,
+      effectiveCycloneRisk > 0,
+      effectiveDroughtHeatwaveRisk > 0,
+    ].filter(Boolean).length;
+    
+    // Base weights for core metrics
+    const baseWeights = {
+      weather: 0.25,
+      satellite: 0.25,
+      social: 0.10,
+    };
+    
+    // Special risk weights (divided among active risks)
+    const specialRiskWeight = activeRisks > 0 ? 0.40 / activeRisks : 0;
+    
+    // Distribute weights dynamically
+    const weights = {
+      weather: baseWeights.weather,
+      satellite: baseWeights.satellite,
+      social: baseWeights.social,
+      earthquake: effectiveEarthquakeRisk > 0 ? specialRiskWeight : 0,
+      flood: effectiveFloodRisk > 0 ? specialRiskWeight : 0,
+      cyclone: effectiveCycloneRisk > 0 ? specialRiskWeight : 0,
+      droughtHeatwave: effectiveDroughtHeatwaveRisk > 0 ? specialRiskWeight : 0,
+    };
+    
+    // If no special risks, redistribute weights to core metrics
+    if (activeRisks === 0) {
+      weights.weather = 0.40;
+      weights.satellite = 0.40;
+      weights.social = 0.20;
     }
 
     return (
-      weatherSeverity * effectiveWeights.weather +
-      satelliteDamage * effectiveWeights.satellite +
-      socialUrgency * effectiveWeights.social +
-      effectiveEarthquakeRisk * effectiveWeights.earthquake +
-      effectiveFloodRisk * effectiveWeights.flood
+      weatherSeverity * weights.weather +
+      satelliteDamage * weights.satellite +
+      socialUrgency * weights.social +
+      effectiveEarthquakeRisk * weights.earthquake +
+      effectiveFloodRisk * weights.flood +
+      effectiveCycloneRisk * weights.cyclone +
+      effectiveDroughtHeatwaveRisk * weights.droughtHeatwave
     );
   }
 
@@ -226,6 +268,12 @@ export class AIPredictionService {
     const avgFloodRisk =
       regions.reduce((sum, r) => sum + (r.floodRisk?.riskScore || 0), 0) / regions.length;
 
+    const avgCycloneRisk =
+      regions.reduce((sum, r) => sum + (r.cycloneRisk?.riskScore || 0), 0) / regions.length;
+
+    const avgDroughtHeatwaveRisk =
+      regions.reduce((sum, r) => sum + (r.droughtHeatwaveRisk?.combinedRisk || 0), 0) / regions.length;
+
     return [
       {
         name: 'Weather Severity',
@@ -259,6 +307,20 @@ export class AIPredictionService {
         name: 'Flood Risk',
         value: Math.round(avgFloodRisk),
         status: this.getStatusFromValue(avgFloodRisk),
+        trend: Math.round(Math.random() * 10 - 5),
+        lastUpdated: new Date().toISOString(),
+      },
+      {
+        name: 'Cyclone Risk',
+        value: Math.round(avgCycloneRisk),
+        status: this.getStatusFromValue(avgCycloneRisk),
+        trend: Math.round(Math.random() * 10 - 5),
+        lastUpdated: new Date().toISOString(),
+      },
+      {
+        name: 'Drought/Heatwave Risk',
+        value: Math.round(avgDroughtHeatwaveRisk),
+        status: this.getStatusFromValue(avgDroughtHeatwaveRisk),
         trend: Math.round(Math.random() * 10 - 5),
         lastUpdated: new Date().toISOString(),
       },
