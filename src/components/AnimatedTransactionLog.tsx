@@ -10,7 +10,7 @@ const AnimatedTransactionLog = () => {
     queryKey: ['transactions'],
     queryFn: fetchTransactions,
     refetchInterval: 10000, // Refetch every 10 seconds
-    staleTime: 9000,
+    staleTime: 0, // Always consider data stale to get fresh updates
   });
 
   const [newTransaction, setNewTransaction] = useState(false);
@@ -83,12 +83,12 @@ const AnimatedTransactionLog = () => {
                   {tx.status === "verified" ? (
                     <Badge className="bg-accent/20 text-accent border-accent/30">
                       <CheckCircle className="w-3 h-3 mr-1" />
-                      Verified
+                      Verified on Blockchain
                     </Badge>
                   ) : (
-                    <Badge className="bg-secondary/20 text-secondary border-secondary/30 animate-pulse">
-                      <Clock className="w-3 h-3 mr-1" />
-                      Pending
+                    <Badge className="bg-yellow-500/20 text-yellow-600 border-yellow-500/30 animate-pulse">
+                      <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                      Processing...
                     </Badge>
                   )}
                 </div>

@@ -334,5 +334,77 @@ export class PolygonService {
       console.log('[Polygon] ⏹️ Stopped transaction monitoring');
     }
   }
+
+  /**
+   * Get provider instance (for external use)
+   */
+  getProvider(): ethers.JsonRpcProvider | null {
+    return this.provider;
+  }
+
+  /**
+   * Get wallet instance (for external use)
+   */
+  getWallet(): ethers.Wallet | null {
+    return this.wallet;
+  }
+
+  /**
+   * Send a real transaction to Polygon Amoy blockchain
+   * This creates a verifiable transaction on PolygonScan
+   */
+  async sendTransaction(
+    toAddress: string,
+    amount: string, // Amount in MATIC (as string, e.g., "0.0001")
+    data?: string // Optional transaction data/memo
+  ): Promise<{ hash: string; blockNumber: number }> {
+    if (!this.wallet || !this.provider) {
+      throw new Error('Wallet not connected. Please add POLYGON_PRIVATE_KEY to .env');
+    }
+
+    try {
+      // Convert amount to Wei
+      const amountInWei = ethers.parseEther(amount);
+      
+      // Prepare transaction
+      const txRequest: ethers.TransactionRequest = {
+        to: toAddress,
+        value: amountInWei,
+      };
+
+      // Add data if provided (for memo/description)
+      if (data) {
+        // Encode the data as UTF-8 bytes
+        // ethers accepts BytesLike which includes Uint8Array
+        txRequest.data = ethers.toUtf8Bytes(data) as any;
+      }
+
+      console.log(`[Polygon] 📤 Sending transaction: ${amount} MATIC to ${toAddress}`);
+      
+      // Send transaction
+      const txResponse = await this.wallet.sendTransaction(txRequest);
+      
+      console.log(`[Polygon] ⏳ Transaction sent! Hash: ${txResponse.hash}`);
+      console.log(`[Polygon] ⏳ Waiting for confirmation...`);
+      
+      // Wait for transaction to be mined
+      const receipt = await txResponse.wait();
+      
+      if (!receipt) {
+        throw new Error('Transaction receipt not received');
+      }
+
+      console.log(`[Polygon] ✅ Transaction confirmed! Block: ${receipt.blockNumber}`);
+      console.log(`[Polygon] 🔗 View on PolygonScan: ${this.getPolygonScanUrl(receipt.hash)}`);
+
+      return {
+        hash: receipt.hash,
+        blockNumber: receipt.blockNumber,
+      };
+    } catch (error: any) {
+      console.error('[Polygon] ❌ Error sending transaction:', error.message);
+      throw error;
+    }
+  }
 }
 

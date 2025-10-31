@@ -145,6 +145,13 @@ export interface PaymentOptions {
     qrCode: string | null;
     available: boolean;
   };
+  razorpayQR: {
+    qrCodeUrl: string | null;
+    qrCodeId: string | null;
+    qrCodeImage: string | null;
+    available: boolean;
+    note: string;
+  };
   bankAccount: {
     available: boolean;
     accountNumber?: string;
@@ -174,6 +181,44 @@ export async function fetchPaymentOptions(): Promise<PaymentOptions> {
 
   if (!response.ok) {
     throw new Error('Failed to fetch payment options');
+  }
+
+  return response.json();
+}
+
+/**
+ * Record UPI payment as blockchain transaction
+ */
+export interface RecordUPIPaymentRequest {
+  amount: number;
+  upiReference: string;
+  donorName?: string;
+  donorPhone?: string;
+  region?: string;
+  description?: string;
+  sendToBlockchain?: boolean;
+}
+
+export interface RecordUPIPaymentResponse {
+  success: boolean;
+  message: string;
+  transaction: BlockchainTransaction;
+}
+
+export async function recordUPIPayment(
+  payment: RecordUPIPaymentRequest
+): Promise<RecordUPIPaymentResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/payments/record-upi`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payment),
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || 'Failed to record UPI payment');
   }
 
   return response.json();

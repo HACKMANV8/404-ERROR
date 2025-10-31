@@ -256,7 +256,7 @@ export class PaymentGatewayService {
   }
 
   /**
-   * Generate UPI QR code data
+   * Generate UPI QR code data (legacy - direct UPI, no automatic detection)
    */
   generateUPIQR(upiId?: string, amount?: number, merchantName?: string, transactionNote?: string): string {
     const finalUpiId = upiId || this.upiId || '';
@@ -267,6 +267,68 @@ export class PaymentGatewayService {
     // UPI payment URL format
     const upiUrl = `upi://pay?pa=${finalUpiId}&pn=${encodeURIComponent(finalMerchantName)}${finalAmount}&cu=INR${finalNote}`;
     return upiUrl;
+  }
+
+  /**
+   * Create Razorpay QR code (for automatic payment detection via webhook)
+   * Returns QR code image URL and reference ID
+   */
+  async createRazorpayQRCode(amount?: number, description?: string): Promise<{ qrCodeUrl: string; qrCodeId: string; qrCodeImage: string } | null> {
+    try {
+      if (!this.razorpayKeyId || !this.razorpayKeySecret) {
+        console.log('[Payment Gateway] ⚠️ Razorpay not configured - cannot create QR code');
+        return null;
+      }
+
+      // Razorpay QR Code API endpoint
+      const razorpayUrl = 'https://api.razorpay.com/v1/qr_codes';
+      
+      // Create QR code request
+      const qrData: any = {
+        type: 'upi_qr', // Static QR code
+        name: 'ResQ Ledger Donation',
+        usage: 'multiple_use', // Can accept multiple payments
+        description: description || 'Donation for disaster relief',
+        fixed_amount: amount ? true : false,
+      };
+
+      // If amount specified, add it (in paise)
+      if (amount) {
+        qrData.fixed_amount = true;
+        qrData.payments = {
+          amount: Math.round(amount * 100), // Convert to paise
+          currency: 'INR',
+        };
+      }
+
+      // Create Basic Auth header
+      const auth = Buffer.from(`${this.razorpayKeyId}:${this.razorpayKeySecret}`).toString('base64');
+
+      const response = await axios.post(razorpayUrl, qrData, {
+        headers: {
+          'Authorization': `Basic ${auth}`,
+          'Content-Type': 'application/json',
+        },
+        timeout: 10000,
+      });
+
+      const qrCode = response.data;
+
+      console.log(`[Payment Gateway] ✅ Razorpay QR code created: ${qrCode.id}`);
+
+      return {
+        qrCodeUrl: qrCode.short_url || `https://razorpay.com/qr/${qrCode.id}`,
+        qrCodeId: qrCode.id,
+        qrCodeImage: qrCode.image_url || qrCode.qr_url || qrCode.short_url,
+      };
+    } catch (error: any) {
+      console.error('[Payment Gateway] ❌ Razorpay QR code creation error:', error.message);
+      if (error.response) {
+        console.error('[Payment Gateway] Response:', error.response.data);
+      }
+      // Return null to fall back to direct UPI QR code
+      return null;
+    }
   }
 
   /**

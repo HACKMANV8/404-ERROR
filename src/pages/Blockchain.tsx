@@ -6,15 +6,17 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import ParticleField from "@/components/ParticleField";
 import { fetchTransactions, fetchWalletInfo, fetchPaymentOptions, type BlockchainTransaction } from "@/lib/api";
-import { Activity, CheckCircle, Clock, ExternalLink, Shield, RefreshCw, QrCode, Wallet, Copy, Check, IndianRupee, Smartphone } from "lucide-react";
+import { Activity, CheckCircle, Clock, ExternalLink, Shield, RefreshCw, QrCode, Wallet, Copy, Check, IndianRupee, Smartphone, Plus } from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
+import PaymentRecordForm from "@/components/PaymentRecordForm";
 
 const Blockchain = () => {
-  const { data: transactionData, isLoading } = useQuery({
+  const { data: transactionData, isLoading, refetch: refetchTransactions } = useQuery({
     queryKey: ['transactions'],
     queryFn: fetchTransactions,
-    refetchInterval: 10000, // Refetch every 10 seconds
-    staleTime: 9000,
+    refetchInterval: 2000, // Refetch every 2 seconds to catch blockchain confirmations quickly
+    staleTime: 0, // Always consider data stale to get fresh updates
+    gcTime: 0, // Keep cache fresh
   });
 
   const { data: walletInfo } = useQuery({
@@ -173,16 +175,95 @@ const Blockchain = () => {
           </Card>
         )}
 
-        {/* UPI Payment Section */}
-        {paymentOptions?.upi.available && (
+        {/* Admin Form: Record UPI Payment Manually */}
+        <Card className="p-6 border-primary/30 bg-gradient-to-r from-primary/5 to-card mb-8">
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-3">
+              <Plus className="w-6 h-6 text-primary" />
+              <h3 className="text-xl font-semibold">Admin: Record Payment</h3>
+            </div>
+            <span className="text-xs text-muted-foreground">
+              Quick manual entry
+            </span>
+          </div>
+          <PaymentRecordForm 
+            onSuccess={() => {
+              // Immediate refetch - no delay needed
+              refetchTransactions();
+            }}
+          />
+        </Card>
+
+        {/* Razorpay QR Code Section (Automatic Detection) */}
+        {paymentOptions?.razorpayQR?.available && (
+          <Card className="p-6 border-primary/30 bg-gradient-to-r from-primary/5 to-card mb-8">
+            <div className="flex items-center gap-3 mb-4">
+              <QrCode className="w-6 h-6 text-primary" />
+              <h3 className="text-xl font-semibold">Donate via QR Code</h3>
+              <Badge className="bg-primary/20 text-primary border-primary/30">Auto-Detection</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Scan this QR code with any UPI app. Payments are automatically detected and recorded!
+            </p>
+            <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
+              {/* Razorpay QR Code Image */}
+              <div className="flex-shrink-0">
+                <div className="p-4 bg-white rounded-lg border-2 border-primary shadow-lg">
+                  {paymentOptions.razorpayQR.qrCodeImage ? (
+                    <img 
+                      src={paymentOptions.razorpayQR.qrCodeImage} 
+                      alt="Razorpay QR Code"
+                      className="w-[200px] h-[200px] object-contain"
+                    />
+                  ) : paymentOptions.razorpayQR.qrCodeUrl ? (
+                    <QRCodeSVG 
+                      value={paymentOptions.razorpayQR.qrCodeUrl} 
+                      size={200} 
+                      level="M"
+                      includeMargin={true}
+                    />
+                  ) : null}
+                </div>
+                <p className="text-xs text-center text-muted-foreground mt-2">
+                  ✅ Automatic payment detection enabled
+                </p>
+              </div>
+              
+              {/* QR Code Info */}
+              <div className="flex-1">
+                <div className="mb-3">
+                  <p className="text-xs text-muted-foreground mb-2">QR Code ID</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 p-3 rounded-lg bg-muted/50 border border-border/50 font-mono text-sm break-all">
+                      {paymentOptions.razorpayQR.qrCodeId || 'Generating...'}
+                    </div>
+                  </div>
+                </div>
+                <div className="p-3 rounded-lg bg-primary/10 border border-primary/20">
+                  <p className="text-xs font-medium text-primary mb-1">✨ Automatic Detection</p>
+                  <p className="text-xs text-muted-foreground">
+                    Payments made through this QR code are automatically recorded via Razorpay webhooks. No manual entry needed!
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground mt-3">
+                  <IndianRupee className="w-4 h-4" />
+                  <span>Supported: PhonePe, Google Pay, Paytm, BHIM, and all UPI apps</span>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Direct UPI Payment Section (Manual Entry Required) */}
+        {paymentOptions?.upi.available && !paymentOptions?.razorpayQR?.available && (
           <Card className="p-6 border-accent/30 bg-gradient-to-r from-accent/5 to-card mb-8">
             <div className="flex items-center gap-3 mb-4">
               <Smartphone className="w-6 h-6 text-accent" />
               <h3 className="text-xl font-semibold">Donate via UPI</h3>
-              <Badge className="bg-accent/20 text-accent border-accent/30">Instant</Badge>
+              <Badge className="bg-secondary/20 text-secondary border-secondary/30">Manual Entry</Badge>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              Scan the QR code or enter the UPI ID to make a donation
+              Scan the QR code or enter the UPI ID to make a donation. Use the admin form above to record payments manually.
             </p>
             <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
               {/* QR Code */}
@@ -205,7 +286,7 @@ const Blockchain = () => {
                   ) : null}
                 </div>
                 <p className="text-xs text-center text-muted-foreground mt-2">
-                  Scan with any UPI app
+                  ⚠️ Manual entry required
                 </p>
               </div>
               
@@ -344,15 +425,23 @@ const Blockchain = () => {
                       {tx.status === "verified" ? (
                         <Badge className="bg-accent/20 text-accent border-accent/30">
                           <CheckCircle className="w-3 h-3 mr-1" />
-                          Verified
+                          Verified on Blockchain
                         </Badge>
                       ) : (
-                        <Badge className="bg-secondary/20 text-secondary border-secondary/30">
-                          <Clock className="w-3 h-3 mr-1" />
-                          Pending
+                        <Badge className="bg-yellow-500/20 text-yellow-600 border-yellow-500/30 animate-pulse">
+                          <RefreshCw className="w-3 h-3 mr-1 animate-spin" />
+                          Processing on Blockchain...
                         </Badge>
                       )}
                     </div>
+                    {tx.status === "pending" && (
+                      <div className="mb-2 p-2 rounded bg-yellow-500/10 border border-yellow-500/20">
+                        <p className="text-xs text-yellow-600 flex items-center gap-2">
+                          <RefreshCw className="w-3 h-3 animate-spin" />
+                          Waiting for blockchain confirmation (2-5 seconds)...
+                        </p>
+                      </div>
+                    )}
                     <div className="grid md:grid-cols-3 gap-4">
                       <div>
                         <p className="text-xs text-muted-foreground mb-1">Donor</p>
@@ -375,16 +464,27 @@ const Blockchain = () => {
                       <p className="text-xs text-muted-foreground">Block #{tx.blockNumber}</p>
                     )}
                     <div className="flex items-center gap-2 md:justify-end">
-                      <span className="font-mono text-xs text-muted-foreground">{truncateHash(tx.hash)}</span>
-                      <Button 
-                        variant="ghost" 
-                        size="icon" 
-                        className="h-8 w-8"
-                        onClick={() => window.open(getPolygonScanUrl(tx.hash), '_blank')}
-                        title="View on PolygonScan"
-                      >
-                        <ExternalLink className="w-4 h-4" />
-                      </Button>
+                      {tx.status === "verified" && tx.hash.startsWith('0x') ? (
+                        <>
+                          <span className="font-mono text-xs text-muted-foreground">{truncateHash(tx.hash)}</span>
+                          <Button 
+                            variant="ghost" 
+                            size="icon" 
+                            className="h-8 w-8"
+                            onClick={() => window.open(getPolygonScanUrl(tx.hash), '_blank')}
+                            title="View on PolygonScan"
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </Button>
+                        </>
+                      ) : (
+                        <span className="font-mono text-xs text-yellow-600">
+                          {tx.hash ? truncateHash(tx.hash) : 'Generating blockchain hash...'}
+                          {tx.status === "pending" && (
+                            <RefreshCw className="w-3 h-3 inline-block ml-1 animate-spin" />
+                          )}
+                        </span>
+                      )}
                     </div>
                   </div>
                 </div>

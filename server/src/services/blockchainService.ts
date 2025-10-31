@@ -1,18 +1,29 @@
 import type { BlockchainTransaction, TransactionResponse } from '../types/index.js';
 import { PolygonService } from './polygonService.js';
 import { PaymentGatewayService } from './paymentGatewayService.js';
+import { UPIPaymentService } from './upiPaymentService.js';
+import { getDatabase } from '../config/database.js';
+import { TransactionModel } from '../models/Transaction.js';
 
 export class BlockchainService {
   private transactions: BlockchainTransaction[] = [];
   private blockCounter = 156;
   private polygonService: PolygonService;
   private paymentGatewayService: PaymentGatewayService;
+  private upiPaymentService: UPIPaymentService;
+  private transactionModel: TransactionModel | null = null;
   private isRealBlockchainConnected: boolean = false;
   private walletBalance: string = '0';
+  private processedTransactionHashes: Set<string> = new Set(); // Track hashes we've processed via UPI payments
 
   constructor() {
     this.polygonService = new PolygonService();
     this.paymentGatewayService = new PaymentGatewayService();
+    this.upiPaymentService = new UPIPaymentService(this.polygonService);
+    
+    // Initialize MongoDB model if database is connected
+    this.initializeMongoDB();
+    
     
     // Try to connect to real blockchain (async - won't block)
     this.connectToBlockchain().catch((error) => {
@@ -20,7 +31,153 @@ export class BlockchainService {
     });
     
     // Initialize with sample transactions for immediate display
-    this.initializeTransactions();
+    // DISABLED: Uncomment below to enable sample transactions for demo purposes
+    // this.initializeTransactions();
+  }
+
+  /**
+   * Initialize MongoDB connection (called after database connection is ready)
+   */
+  private initializeMongoDB(): void {
+    const db = getDatabase();
+    if (db) {
+      this.transactionModel = new TransactionModel(db);
+      console.log('[Blockchain] ✅ MongoDB integration enabled');
+      // Migrate existing transactions to MongoDB
+      this.migrateTransactionsToMongoDB().catch((error) => {
+        console.error('[Blockchain] ⚠️ Error during migration:', error.message);
+      });
+    } else {
+      console.log('[Blockchain] ⚠️ MongoDB not connected yet, will retry...');
+      let retryCount = 0;
+      const maxRetries = 15; // 30 seconds total (15 * 2 seconds)
+      
+      // Retry every 2 seconds until connected
+      const retryInterval = setInterval(() => {
+        retryCount++;
+        const db = getDatabase();
+        if (db) {
+          this.transactionModel = new TransactionModel(db);
+          console.log('[Blockchain] ✅ MongoDB integration enabled (delayed - after retry)');
+          // Migrate existing transactions once connected
+          this.migrateTransactionsToMongoDB().catch((error) => {
+            console.error('[Blockchain] ⚠️ Error during migration:', error.message);
+          });
+          clearInterval(retryInterval);
+        } else if (retryCount >= maxRetries) {
+          clearInterval(retryInterval);
+          console.log('[Blockchain] ⚠️ MongoDB connection timeout after 30 seconds');
+          console.log('[Blockchain] 💡 To fix: Ensure MongoDB is running or provide MongoDB Atlas connection string');
+          console.log('[Blockchain] 💡 Transactions will be saved in memory but lost on server restart');
+        }
+      }, 2000);
+    }
+  }
+
+  /**
+   * Public method to force re-initialize MongoDB connection
+   * Useful when MongoDB connects after BlockchainService is instantiated
+   */
+  public reinitializeMongoDB(): void {
+    console.log('[Blockchain] 🔄 Re-initializing MongoDB connection...');
+    this.transactionModel = null; // Reset
+    this.initializeMongoDB();
+  }
+
+  /**
+   * Ensure MongoDB model is available (call before saving)
+   */
+  private ensureMongoDBModel(): void {
+    if (!this.transactionModel) {
+      const db = getDatabase();
+      if (db) {
+        this.transactionModel = new TransactionModel(db);
+        console.log('[Blockchain] ✅ MongoDB model initialized on-demand');
+      } else {
+        console.warn('[Blockchain] ⚠️ Cannot initialize MongoDB model - database not connected');
+      }
+    } else {
+      // Double-check that the database is still connected
+      const db = getDatabase();
+      if (!db) {
+        console.warn('[Blockchain] ⚠️ Database connection lost - resetting transaction model');
+        this.transactionModel = null;
+      }
+    }
+  }
+
+  /**
+   * Migrate existing in-memory transactions to MongoDB
+   * This ensures all transactions are persisted
+   * Public method to allow external triggering after MongoDB connection
+   */
+  async migrateTransactionsToMongoDB(): Promise<void> {
+    this.ensureMongoDBModel();
+    
+    if (!this.transactionModel) {
+      console.log('[Blockchain] ⚠️ MongoDB model not ready yet, skipping migration');
+      return;
+    }
+    
+    if (this.transactions.length === 0) {
+      console.log('[Blockchain] ℹ️ No transactions to migrate');
+      return;
+    }
+
+    try {
+      console.log(`[Blockchain] 🔄 Migrating ${this.transactions.length} transactions to MongoDB...`);
+      
+      let migratedCount = 0;
+      let skippedCount = 0;
+
+      for (const tx of this.transactions) {
+        try {
+          // Check if transaction already exists (by hash)
+          const existing = await this.transactionModel.findByHash(tx.hash);
+          
+          if (!existing) {
+            // Insert transaction
+            await this.transactionModel.insert({
+              ...tx,
+              upiReference: undefined,
+              paymentMethod: undefined,
+              amountInINR: undefined,
+              donorPhone: undefined,
+              description: undefined,
+            });
+            migratedCount++;
+          } else {
+            skippedCount++;
+          }
+        } catch (error: any) {
+          // Skip duplicates or errors for individual transactions
+          if (error.message?.includes('duplicate') || error.message?.includes('E11000')) {
+            skippedCount++;
+          } else {
+            console.error(`[Blockchain] ⚠️ Error migrating transaction ${tx.id}:`, error.message);
+          }
+        }
+      }
+
+      console.log(`[Blockchain] ✅ Migration complete: ${migratedCount} migrated, ${skippedCount} already exist`);
+      
+      // Reload from MongoDB to ensure consistency
+      const dbTransactions = await this.transactionModel.findAll(100);
+      this.transactions = dbTransactions.map(tx => ({
+        id: tx.id,
+        donor: tx.donor,
+        region: tx.region,
+        amount: tx.amount,
+        timestamp: tx.timestamp,
+        hash: tx.hash,
+        status: tx.status,
+        blockNumber: tx.blockNumber,
+      }));
+      
+      console.log(`[Blockchain] ✅ Loaded ${this.transactions.length} transactions from MongoDB after migration`);
+    } catch (error: any) {
+      console.error('[Blockchain] ❌ Error migrating transactions to MongoDB:', error.message);
+    }
   }
 
   /**
@@ -36,9 +193,20 @@ export class BlockchainService {
         
         // Start monitoring for new transactions
         this.polygonService.startMonitoring((newTransactions) => {
-          // Add new transactions to our list
-          this.transactions = [...newTransactions, ...this.transactions];
-          console.log(`[Blockchain] ✅ New transactions detected: ${newTransactions.length}`);
+          // Filter out transactions we've already processed via UPI payment flow
+          const unprocessedTransactions = newTransactions.filter(tx => {
+            if (this.processedTransactionHashes.has(tx.hash.toLowerCase())) {
+              console.log(`[Blockchain] ℹ️ Skipping transaction ${tx.hash} - already processed via UPI payment`);
+              return false; // Skip this transaction - we already have it with UPI details
+            }
+            return true; // Keep this transaction
+          });
+          
+          if (unprocessedTransactions.length > 0) {
+            // Add new transactions to our list (only unprocessed ones)
+            this.transactions = [...unprocessedTransactions, ...this.transactions];
+            console.log(`[Blockchain] ✅ New transactions detected: ${unprocessedTransactions.length} (${newTransactions.length - unprocessedTransactions.length} skipped as duplicates)`);
+          }
         });
         
         // Fetch existing transactions
@@ -72,7 +240,78 @@ export class BlockchainService {
    * Get all blockchain transactions
    */
   async getTransactions(): Promise<TransactionResponse> {
-    // If using real blockchain, refresh transactions periodically
+    // Ensure MongoDB model is available
+    this.ensureMongoDBModel();
+    
+    // If MongoDB is available, read from database
+    if (this.transactionModel) {
+      try {
+        console.log('[Blockchain] 📖 Reading transactions from MongoDB...');
+        const dbTransactions = await this.transactionModel.findAll(50);
+        console.log(`[Blockchain] ✅ Found ${dbTransactions.length} transactions in MongoDB`);
+        
+        // Convert to BlockchainTransaction format
+        const dbTxList: BlockchainTransaction[] = dbTransactions.map(tx => ({
+          id: tx.id,
+          donor: tx.donor,
+          region: tx.region,
+          amount: tx.amount,
+          timestamp: tx.timestamp,
+          hash: tx.hash,
+          status: tx.status,
+          blockNumber: tx.blockNumber,
+        }));
+
+        // Merge with in-memory cache (latest transactions might not be in DB yet)
+        // Create a map to avoid duplicates
+        const txMap = new Map<string, BlockchainTransaction>();
+        
+        // Add MongoDB transactions first (older ones)
+        for (const tx of dbTxList) {
+          txMap.set(tx.id, tx);
+        }
+        
+        // Add in-memory transactions (newer ones, will overwrite if duplicate)
+        for (const tx of this.transactions) {
+          txMap.set(tx.id, tx);
+        }
+        
+        // Convert back to array and sort by timestamp (newest first)
+        const transactions = Array.from(txMap.values()).sort((a, b) => 
+          new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+        ).slice(0, 50); // Limit to 50 most recent
+
+        // Update in-memory cache with merged list
+        this.transactions = transactions;
+        this.blockCounter = dbTransactions[0]?.blockNumber || this.blockCounter;
+
+        // Calculate totals from merged transactions
+        const totalTransactions = await this.transactionModel.getTotalCount();
+        const totalAidValue = await this.transactionModel.getTotalAid();
+        const totalAid = this.formatAidAmount(totalAidValue);
+
+        console.log(`[Blockchain] ✅ Returning ${transactions.length} transactions (${dbTxList.length} from DB + ${this.transactions.length} from cache)`);
+
+        return {
+          transactions,
+          totalTransactions,
+          totalAid,
+          smartContracts: this.blockCounter,
+          avgProcessingTime: '2.3s',
+          walletAddress: this.polygonService.getWalletAddress(),
+          walletBalance: this.walletBalance,
+          isRealBlockchain: this.isRealBlockchainConnected,
+        };
+      } catch (error: any) {
+        console.error('[Blockchain] ❌ Error reading from MongoDB:', error.message);
+        console.error('[Blockchain] Error details:', error);
+        // Fallback to in-memory
+      }
+    } else {
+      console.log('[Blockchain] ⚠️ MongoDB not available, using in-memory transactions');
+    }
+
+    // Fallback: If using real blockchain, refresh transactions periodically
     if (this.isRealBlockchainConnected) {
       await this.loadRealTransactions();
       this.walletBalance = await this.polygonService.getBalance();
@@ -138,7 +377,7 @@ export class BlockchainService {
    * Add a new transaction (simulated blockchain write)
    * In production, this would interact with smart contracts
    */
-  addTransaction(transaction: Omit<BlockchainTransaction, 'id' | 'hash' | 'timestamp'>): BlockchainTransaction {
+  async addTransaction(transaction: Omit<BlockchainTransaction, 'id' | 'hash' | 'timestamp'>): Promise<BlockchainTransaction> {
     const newTx: BlockchainTransaction = {
       ...transaction,
       id: `TX-${String(Math.floor(Math.random() * 10000)).padStart(4, '0')}-${Math.random().toString(36).substring(2, 6).toUpperCase()}`,
@@ -147,11 +386,47 @@ export class BlockchainService {
       blockNumber: this.blockCounter++,
     };
 
+    // Save to MongoDB if available
+    this.ensureMongoDBModel();
+    if (this.transactionModel) {
+      try {
+        // Check for duplicate before inserting
+        const existing = await this.transactionModel.findByHash(newTx.hash);
+        if (existing) {
+          console.log(`[Blockchain] ⚠️ Transaction ${newTx.id} already exists in MongoDB (skipping duplicate)`);
+        } else {
+          await this.transactionModel.insert({
+            ...newTx,
+            paymentMethod: 'blockchain',
+          });
+          console.log(`[Blockchain] ✅ Transaction saved to MongoDB: ${newTx.id}`);
+        }
+      } catch (error: any) {
+        // Handle duplicate key errors gracefully
+        if (error.code === 11000 || error.message?.includes('duplicate') || error.message?.includes('E11000')) {
+          console.log(`[Blockchain] ℹ️ Transaction ${newTx.id} already exists in MongoDB (duplicate key)`);
+        } else {
+          console.error('[Blockchain] ❌ Error saving to MongoDB:', error.message);
+          console.error('[Blockchain] Error code:', error.code);
+          console.error('[Blockchain] Full error:', error);
+        }
+      }
+    } else {
+      console.warn('[Blockchain] ⚠️ MongoDB model not available - transaction not saved to database');
+      console.warn('[Blockchain] 💡 To fix: Ensure MongoDB is running and MONGODB_URI is set in .env');
+    }
+
     // Simulate verification delay
     if (transaction.status === 'pending') {
       setTimeout(() => {
         const tx = this.transactions.find((t) => t.id === newTx.id);
-        if (tx) tx.status = 'verified';
+        if (tx) {
+          tx.status = 'verified';
+          // Update in MongoDB too
+          if (this.transactionModel) {
+            this.transactionModel.update(newTx.id, { status: 'verified' }).catch(console.error);
+          }
+        }
       }, 2000 + Math.random() * 3000);
     }
 
@@ -211,7 +486,7 @@ export class BlockchainService {
       region: regions[Math.floor(Math.random() * regions.length)],
       amount: amounts[Math.floor(Math.random() * amounts.length)],
       status: Math.random() > 0.3 ? 'verified' : 'pending',
-    });
+    }).catch(console.error);
   }
 
   /**
@@ -233,5 +508,109 @@ export class BlockchainService {
    */
   isConnected(): boolean {
     return this.isRealBlockchainConnected;
+  }
+
+  /**
+   * Record UPI payment as blockchain transaction
+   */
+  async recordUPIPayment(
+    payment: {
+      amount: number;
+      upiReference: string;
+      donorName?: string;
+      donorPhone?: string;
+      region?: string;
+      description?: string;
+      sendToBlockchain?: boolean;
+    }
+  ): Promise<BlockchainTransaction> {
+    const paymentRecord = {
+      amount: payment.amount,
+      upiReference: payment.upiReference,
+      donorName: payment.donorName,
+      donorPhone: payment.donorPhone,
+      region: payment.region,
+      description: payment.description,
+      timestamp: new Date().toISOString(),
+      verified: true,
+    };
+
+    // Record the payment as blockchain transaction
+    // This will wait for blockchain confirmation (2-5 seconds) to get REAL hash
+    console.log(`[Blockchain] 📝 Recording UPI payment: ${payment.upiReference}, Amount: ₹${payment.amount}`);
+    console.log(`[Blockchain] ⏳ Waiting for blockchain confirmation (this may take 2-5 seconds)...`);
+    
+    const blockchainTx = await this.upiPaymentService.recordUPIPayment(
+      paymentRecord,
+      payment.sendToBlockchain || false
+    );
+    
+    if (blockchainTx.status === 'verified' && blockchainTx.hash.startsWith('0x')) {
+      console.log(`[Blockchain] ✅ Transaction created with REAL blockchain hash: ${blockchainTx.id}`);
+      console.log(`[Blockchain] 🔗 Real Hash: ${blockchainTx.hash}`);
+      console.log(`[Blockchain] 📦 Block Number: ${blockchainTx.blockNumber}`);
+      console.log(`[Blockchain] 🔗 View on PolygonScan: https://amoy.polygonscan.com/tx/${blockchainTx.hash}`);
+    } else {
+      console.log(`[Blockchain] ⚠️ Transaction created without blockchain confirmation: ${blockchainTx.id}`);
+    }
+
+    // Mark this hash as processed (so monitoring doesn't create a duplicate)
+    this.processedTransactionHashes.add(blockchainTx.hash.toLowerCase());
+    
+    // Add to in-memory cache with REAL hash (blockchain confirmation complete)
+    this.transactions.unshift(blockchainTx);
+    console.log(`[Blockchain] ✅ Transaction added to in-memory cache. Total transactions: ${this.transactions.length}`);
+
+    // Save to MongoDB if available
+    this.ensureMongoDBModel();
+    if (this.transactionModel) {
+      try {
+        // Check for duplicate before inserting
+        const existing = await this.transactionModel.findByHash(blockchainTx.hash);
+        if (existing) {
+          console.log(`[Blockchain] ⚠️ Transaction ${blockchainTx.id} already exists in MongoDB (skipping duplicate)`);
+        } else {
+          await this.transactionModel.insert({
+            ...blockchainTx,
+            upiReference: payment.upiReference,
+            paymentMethod: 'upi',
+            amountInINR: payment.amount,
+            donorPhone: payment.donorPhone,
+            description: payment.description,
+          });
+          console.log(`[Blockchain] ✅ Transaction saved to MongoDB: ${blockchainTx.id}`);
+        }
+      } catch (error: any) {
+        // Handle duplicate key errors gracefully
+        if (error.code === 11000 || error.message?.includes('duplicate') || error.message?.includes('E11000')) {
+          console.log(`[Blockchain] ℹ️ Transaction ${blockchainTx.id} already exists in MongoDB (duplicate key)`);
+        } else {
+          console.error('[Blockchain] ❌ Error saving to MongoDB:', error.message);
+          console.error('[Blockchain] Error code:', error.code);
+          console.error('[Blockchain] Error stack:', error.stack);
+          // Transaction already in cache, so frontend will still show it
+        }
+      }
+    } else {
+      console.warn('[Blockchain] ⚠️ MongoDB model not available - transaction not saved to database');
+      console.warn('[Blockchain] 💡 To fix: Ensure MongoDB is running and MONGODB_URI is set in .env');
+      console.warn('[Blockchain] 💡 Transaction is saved in memory but will be lost on server restart');
+    }
+    
+    // Update block counter if needed
+    if (blockchainTx.blockNumber && blockchainTx.blockNumber > this.blockCounter) {
+      this.blockCounter = blockchainTx.blockNumber;
+    }
+
+    console.log(`[Blockchain] ✅ UPI payment recorded as blockchain transaction: ${blockchainTx.id}`);
+
+    return blockchainTx;
+  }
+
+  /**
+   * Get UPI Payment Service instance
+   */
+  getUPIPaymentService(): UPIPaymentService {
+    return this.upiPaymentService;
   }
 }
