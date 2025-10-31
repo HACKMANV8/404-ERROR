@@ -50,8 +50,17 @@ const upload = multer({
 
 // Services
 const aiPredictionService = new AIPredictionService();
-const blockchainService = new BlockchainService();
+// BlockchainService will be initialized after MongoDB connects
+let blockchainService: BlockchainService | null = null;
 const ocrService = new OCRService();
+
+// Lazy getter for blockchainService to ensure it's initialized
+function getBlockchainService(): BlockchainService {
+  if (!blockchainService) {
+    throw new Error('BlockchainService not initialized yet. MongoDB must connect first.');
+  }
+  return blockchainService;
+}
 
 // Cache for predictions (update every 30 seconds)
 let cachedPredictions: {
@@ -101,7 +110,7 @@ app.get('/api/predictions', async (req: Request, res: Response) => {
  */
 app.get('/api/transactions', async (req: Request, res: Response) => {
   try {
-    const response = await blockchainService.getTransactions();
+    const response = await getBlockchainService().getTransactions();
     res.json(response);
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -125,7 +134,8 @@ app.get('/api/health', (req: Request, res: Response) => {
  */
 app.get('/api/blockchain/wallet', async (req: Request, res: Response) => {
   try {
-    const polygonService = blockchainService.getPolygonService();
+    const service = getBlockchainService();
+    const polygonService = service.getPolygonService();
     const walletAddress = polygonService.getWalletAddress();
     const balance = await polygonService.getBalance();
     
@@ -133,7 +143,7 @@ app.get('/api/blockchain/wallet', async (req: Request, res: Response) => {
       address: walletAddress,
       balance: balance,
       network: 'Polygon Amoy (Testnet)',
-      isConnected: blockchainService.isConnected(),
+      isConnected: service.isConnected(),
     });
   } catch (error) {
     console.error('Error getting wallet info:', error);
@@ -148,7 +158,7 @@ app.post('/api/payments/create', async (req: Request, res: Response) => {
   try {
     const { amount, currency, region, donorName, donorEmail, description } = req.body;
     
-    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const paymentGateway = getBlockchainService().getPaymentGatewayService();
     const payment = await paymentGateway.createPayment({
       amount,
       currency: currency || 'INR',
@@ -172,7 +182,7 @@ app.post('/api/payments/verify', async (req: Request, res: Response) => {
   try {
     const { paymentId, gateway } = req.body;
     
-    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const paymentGateway = getBlockchainService().getPaymentGatewayService();
     const payment = await paymentGateway.verifyPayment(paymentId, gateway);
     
     res.json(payment);
@@ -187,7 +197,7 @@ app.post('/api/payments/verify', async (req: Request, res: Response) => {
  */
 app.get('/api/payments/options', async (req: Request, res: Response) => {
   try {
-    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const paymentGateway = getBlockchainService().getPaymentGatewayService();
     const upiId = paymentGateway.getUPIId();
     const bankAccount = paymentGateway.getBankAccount();
     
@@ -310,8 +320,8 @@ app.post('/api/payments/record-upi', upload.single('screenshot'), async (req: Re
     console.log('[API] ✅ Validating UPI payment:', { amount, upiReference, donorName, region });
 
     // Record UPI payment as blockchain transaction (already signs with private key)
-    console.log('[API] 📝 Calling blockchainService.recordUPIPayment...');
-    const blockchainTx = await blockchainService.recordUPIPayment({
+    console.log('[API] 📝 Calling BlockchainService.recordUPIPayment...');
+    const blockchainTx = await getBlockchainService().recordUPIPayment({
       amount: parseFloat(amount),
       upiReference: upiReference.toString(),
       donorName,
@@ -360,7 +370,8 @@ app.post('/api/payments/verify-and-record-upi', async (req: Request, res: Respon
     }
 
     // Verify payment first
-    const upiService = blockchainService.getUPIPaymentService();
+    const service = getBlockchainService();
+    const upiService = service.getUPIPaymentService();
     const verified = await upiService.verifyUPIPayment(upiReference, parseFloat(amount));
 
     if (!verified) {
@@ -370,7 +381,7 @@ app.post('/api/payments/verify-and-record-upi', async (req: Request, res: Respon
     }
 
     // Record as blockchain transaction
-    const blockchainTx = await blockchainService.recordUPIPayment({
+    const blockchainTx = await service.recordUPIPayment({
       amount: parseFloat(amount),
       upiReference: upiReference.toString(),
       donorName,
@@ -422,7 +433,7 @@ app.post('/api/payments/razorpay-webhook', async (req: Request, res: Response) =
 
       // Record as blockchain transaction
       try {
-        const blockchainTx = await blockchainService.recordUPIPayment({
+        const blockchainTx = await getBlockchainService().recordUPIPayment({
           amount: amountInINR,
           upiReference: payment.id, // Use Razorpay payment ID as reference
           donorName,
@@ -458,41 +469,78 @@ app.listen(PORT, async () => {
   console.log(`   POST /api/payments/record-upi - Record UPI payment manually`);
   console.log(`   POST /api/payments/razorpay-webhook - Razorpay webhook (automatic)`);
   
-  // Connect to MongoDB
-  try {
-    const db = await connectToDatabase();
-    console.log('✅ MongoDB connected successfully');
-    
-    // Force re-initialize BlockchainService MongoDB connection now that DB is ready
-    // This ensures transactionModel is properly initialized even if BlockchainService was created before DB connection
-    setTimeout(async () => {
-      console.log('🔄 Re-initializing BlockchainService MongoDB connection...');
-      try {
-        // Force re-initialization of MongoDB in blockchain service
-        blockchainService.reinitializeMongoDB();
+  // MongoDB connection is MANDATORY - retry until connected
+  // This ensures previous transactions can be loaded from MongoDB Atlas
+  let mongoConnected = false;
+  const maxRetries = 5;
+  let retryCount = 0;
+  
+  while (!mongoConnected && retryCount < maxRetries) {
+    try {
+      console.log(`[Startup] 🔄 Attempting MongoDB connection (attempt ${retryCount + 1}/${maxRetries})...`);
+      const db = await connectToDatabase();
+      console.log('✅ MongoDB connected successfully');
+      mongoConnected = true;
+      break; // Success - exit retry loop
+    } catch (error: any) {
+      retryCount++;
+      console.error(`[Startup] ❌ MongoDB connection attempt ${retryCount} failed:`, error.message);
+      
+      if (retryCount < maxRetries) {
+        const waitTime = retryCount * 2000; // Exponential backoff: 2s, 4s, 6s, 8s
+        console.log(`[Startup] ⏳ Retrying in ${waitTime/1000} seconds...`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      } else {
+        console.error('');
+        console.error('❌ CRITICAL: MongoDB connection failed after all retry attempts!');
+        console.error('   Without MongoDB, previous transactions cannot be loaded.');
+        console.error('');
+        console.error('💡 To fix MongoDB Atlas connection:');
+        console.error('   1. Check your MONGODB_URI in server/.env file');
+        console.error('   2. Verify MongoDB Atlas cluster is running');
+        console.error('   3. Check Network Access in MongoDB Atlas - allow your IP');
+        console.error('   4. Verify username/password in connection string');
+        console.error('   5. Connection string format:');
+        console.error('      MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/resqledger?retryWrites=true&w=majority');
+        console.error('');
+        console.error('⚠️ Server will continue but transactions will NOT be persisted.');
+        console.error('⚠️ Previous transactions will NOT be loaded.');
+        console.error('');
+        console.error('🔄 Creating new MongoDB cluster recommended if connection persists.');
         
-        // Wait a moment for initialization to complete
-        await new Promise(resolve => setTimeout(resolve, 500));
-        
-        console.log('🔄 Starting transaction migration to MongoDB...');
-        // Manually trigger migration
-        await blockchainService.migrateTransactionsToMongoDB();
-        console.log('✅ Transaction migration completed');
-      } catch (error: any) {
-        console.error('⚠️ Error during MongoDB initialization:', error.message);
-        console.error('Error stack:', error.stack);
+        // Still try to initialize BlockchainService for basic functionality
+        // But warn that MongoDB is not available
+        console.log('');
+        console.log('🔄 Initializing BlockchainService without MongoDB (limited functionality)...');
+        blockchainService = new BlockchainService();
+        console.log('⚠️ BlockchainService initialized WITHOUT MongoDB - transactions will not be persisted or loaded');
+        return; // Exit early - don't continue with full initialization
       }
-    }, 1000); // Reduced timeout since DB is already connected
-  } catch (error: any) {
-    console.error('⚠️ MongoDB connection failed:', error.message);
-    console.error('   Transactions will be saved to blockchain only (not persisted)');
-    console.error('💡 To fix:');
-    console.error('   1. If using local MongoDB: Ensure MongoDB service is running');
-    console.error('   2. Check if MongoDB is installed: mongod --version');
-    console.error('   3. Start MongoDB service: Windows - "net start MongoDB" or Linux/Mac - "sudo systemctl start mongod"');
-    console.error('   4. If using MongoDB Atlas: Update MONGODB_URI in .env with your Atlas connection string');
-    console.error('   Example: MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/resqledger');
-    console.error('   5. Test connection: mongosh "mongodb://127.0.0.1:27017"');
+    }
+  }
+  
+  // Only reach here if MongoDB connected successfully
+  if (mongoConnected) {
+    // NOW initialize BlockchainService after MongoDB is connected
+    console.log('');
+    console.log('🔄 Initializing BlockchainService with MongoDB connection...');
+    blockchainService = new BlockchainService();
+    console.log('✅ BlockchainService initialized with MongoDB support');
+    
+    // Wait a moment for BlockchainService to initialize MongoDB model
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    console.log('🔄 Loading previous transactions from MongoDB Atlas...');
+    try {
+      // Load existing transactions from MongoDB (not migration - just loading)
+      const transactions = await blockchainService.getTransactions();
+      console.log(`✅ Loaded ${transactions.transactions.length} previous transactions from MongoDB Atlas`);
+      console.log(`💰 Total Aid Distributed: ${transactions.totalAid}`);
+      console.log(`📊 Total Transactions: ${transactions.totalTransactions}`);
+    } catch (error: any) {
+      console.error('⚠️ Error loading previous transactions:', error.message);
+      // Continue - at least MongoDB is connected for future transactions
+    }
   }
 });
 
@@ -520,7 +568,7 @@ setInterval(async () => {
 // Simulate new blockchain transactions (only if not using real blockchain)
 // DISABLED: Uncomment below to enable simulated transactions for demo purposes
 // setInterval(() => {
-//   if (!blockchainService.isConnected()) {
+//   if (blockchainService && !blockchainService.isConnected()) {
 //     blockchainService.generateSimulatedTransaction();
 //   }
 // }, 10000); // Every 10 seconds

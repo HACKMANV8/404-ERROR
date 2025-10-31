@@ -3,7 +3,7 @@ import { PolygonService } from './polygonService.js';
 import { PaymentGatewayService } from './paymentGatewayService.js';
 import { UPIPaymentService } from './upiPaymentService.js';
 import { getDatabase } from '../config/database.js';
-import { TransactionModel } from '../models/Transaction.js';
+import { TransactionModel, type TransactionDocument } from '../models/Transaction.js';
 
 export class BlockchainService {
   private transactions: BlockchainTransaction[] = [];
@@ -240,7 +240,7 @@ export class BlockchainService {
    * Get all blockchain transactions
    */
   async getTransactions(): Promise<TransactionResponse> {
-    // Ensure MongoDB model is available
+    // Ensure MongoDB model is available - try multiple times if needed
     this.ensureMongoDBModel();
     
     // If MongoDB is available, read from database
@@ -249,6 +249,13 @@ export class BlockchainService {
         console.log('[Blockchain] 📖 Reading transactions from MongoDB...');
         const dbTransactions = await this.transactionModel.findAll(50);
         console.log(`[Blockchain] ✅ Found ${dbTransactions.length} transactions in MongoDB`);
+        
+        // Calculate totals from MongoDB (always use DB totals, not cache)
+        const totalTransactions = await this.transactionModel.getTotalCount();
+        const totalAidValue = await this.transactionModel.getTotalAid();
+        const totalAid = this.formatAidAmount(totalAidValue);
+        
+        console.log(`[Blockchain] 📊 MongoDB totals: ${totalTransactions} transactions, ${totalAid} aid`);
         
         // Convert to BlockchainTransaction format
         const dbTxList: BlockchainTransaction[] = dbTransactions.map(tx => ({
@@ -272,6 +279,7 @@ export class BlockchainService {
         }
         
         // Add in-memory transactions (newer ones, will overwrite if duplicate)
+        const inMemoryCount = this.transactions.length;
         for (const tx of this.transactions) {
           txMap.set(tx.id, tx);
         }
@@ -283,19 +291,19 @@ export class BlockchainService {
 
         // Update in-memory cache with merged list
         this.transactions = transactions;
-        this.blockCounter = dbTransactions[0]?.blockNumber || this.blockCounter;
+        
+        // Update block counter from latest transaction
+        if (dbTransactions.length > 0) {
+          this.blockCounter = dbTransactions[0]?.blockNumber || this.blockCounter;
+        }
 
-        // Calculate totals from merged transactions
-        const totalTransactions = await this.transactionModel.getTotalCount();
-        const totalAidValue = await this.transactionModel.getTotalAid();
-        const totalAid = this.formatAidAmount(totalAidValue);
-
-        console.log(`[Blockchain] ✅ Returning ${transactions.length} transactions (${dbTxList.length} from DB + ${this.transactions.length} from cache)`);
+        console.log(`[Blockchain] ✅ Returning ${transactions.length} transactions (${dbTxList.length} from DB + ${inMemoryCount} from cache)`);
+        console.log(`[Blockchain] 💰 Total Aid: ${totalAid} (from MongoDB)`);
 
         return {
           transactions,
-          totalTransactions,
-          totalAid,
+          totalTransactions, // Use MongoDB count, not cache length
+          totalAid, // Use MongoDB total, not calculated from cache
           smartContracts: this.blockCounter,
           avgProcessingTime: '2.3s',
           walletAddress: this.polygonService.getWalletAddress(),
@@ -304,10 +312,71 @@ export class BlockchainService {
         };
       } catch (error: any) {
         console.error('[Blockchain] ❌ Error reading from MongoDB:', error.message);
-        console.error('[Blockchain] Error details:', error);
-        // Fallback to in-memory
+        console.error('[Blockchain] Error stack:', error.stack);
+        console.error('[Blockchain] ⚠️ Falling back to in-memory cache...');
+        // Continue to fallback below
       }
     } else {
+      console.log('[Blockchain] ⚠️ MongoDB model not available - attempting to initialize...');
+      // Try one more time to initialize
+      this.ensureMongoDBModel();
+      // Check if model is available after initialization
+      if (this.transactionModel) {
+        console.log('[Blockchain] ✅ MongoDB model initialized, attempting to load transactions...');
+        try {
+          // Use type assertion since we've checked it's not null
+          const model = this.transactionModel as TransactionModel;
+          // Try loading from MongoDB now
+          const dbTransactions = await model.findAll(50);
+          const totalTransactions = await model.getTotalCount();
+          const totalAidValue = await model.getTotalAid();
+          const totalAid = this.formatAidAmount(totalAidValue);
+          
+          const dbTxList: BlockchainTransaction[] = dbTransactions.map((tx) => ({
+            id: tx.id,
+            donor: tx.donor,
+            region: tx.region,
+            amount: tx.amount,
+            timestamp: tx.timestamp,
+            hash: tx.hash,
+            status: tx.status,
+            blockNumber: tx.blockNumber,
+          }));
+          
+          // Merge with in-memory cache
+          const txMap = new Map<string, BlockchainTransaction>();
+          for (const tx of dbTxList) {
+            txMap.set(tx.id, tx);
+          }
+          for (const tx of this.transactions) {
+            txMap.set(tx.id, tx);
+          }
+          
+          const transactions = Array.from(txMap.values()).sort((a, b) => 
+            new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
+          ).slice(0, 50);
+          
+          this.transactions = transactions;
+          if (dbTransactions.length > 0) {
+            this.blockCounter = dbTransactions[0]?.blockNumber || this.blockCounter;
+          }
+          
+          console.log(`[Blockchain] ✅ Loaded ${transactions.length} transactions from MongoDB`);
+          
+          return {
+            transactions,
+            totalTransactions,
+            totalAid,
+            smartContracts: this.blockCounter,
+            avgProcessingTime: '2.3s',
+            walletAddress: this.polygonService.getWalletAddress(),
+            walletBalance: this.walletBalance,
+            isRealBlockchain: this.isRealBlockchainConnected,
+          };
+        } catch (error: any) {
+          console.error('[Blockchain] ❌ Error loading transactions after initialization:', error.message);
+        }
+      }
       console.log('[Blockchain] ⚠️ MongoDB not available, using in-memory transactions');
     }
 
@@ -323,6 +392,8 @@ export class BlockchainService {
 
     // Calculate average processing time (real blockchain: ~2-5 seconds)
     const avgProcessingTime = this.isRealBlockchainConnected ? '2.3s' : '2.3s';
+
+    console.log(`[Blockchain] ⚠️ Using fallback: ${this.transactions.length} in-memory transactions`);
 
     return {
       transactions: this.transactions.slice(0, 50), // Return latest 50
