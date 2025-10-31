@@ -49,6 +49,7 @@ export interface SatelliteData {
   affectedArea: number;
   confidence: number;
   timestamp: string;
+  sources?: string[];
 }
 
 export interface BlockchainTransaction {
