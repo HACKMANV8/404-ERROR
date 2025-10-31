@@ -1,0 +1,29 @@
+{
+  "name": "resq-ledger-server",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Backend API server for ResQ Ledger disaster relief system",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.1",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "axios": "^1.7.7",
+    "node-cron": "^3.0.3",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.17",
+    "@types/node": "^22.7.5",
+    "@types/node-cron": "^3.0.11",
+    "@types/ws": "^8.5.10",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3"
+  }
+}

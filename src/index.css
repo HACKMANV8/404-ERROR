@@ -1,0 +1,82 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Definition of the design system. All colors, gradients, fonts, etc should be defined here. 
+All colors MUST be HSL.
+*/
+
+@layer base {
+  :root {
+    /* Deep space background */
+    --background: 220 45% 4%;
+    --foreground: 180 100% 95%;
+
+    /* Glass cards */
+    --card: 220 40% 8%;
+    --card-foreground: 180 100% 95%;
+
+    --popover: 220 40% 8%;
+    --popover-foreground: 180 100% 95%;
+
+    /* Turquoise primary */
+    --primary: 180 85% 50%;
+    --primary-foreground: 220 45% 4%;
+
+    /* Amber secondary */
+    --secondary: 45 100% 60%;
+    --secondary-foreground: 220 45% 4%;
+
+    /* Subtle muted */
+    --muted: 220 35% 12%;
+    --muted-foreground: 180 20% 65%;
+
+    /* Emerald accent */
+    --accent: 160 84% 39%;
+    --accent-foreground: 220 45% 4%;
+
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 180 100% 95%;
+
+    /* Glowing borders */
+    --border: 180 85% 50% / 0.2;
+    --input: 220 35% 15%;
+    --ring: 180 85% 50%;
+
+    --radius: 0.75rem;
+
+    /* Sidebar */
+    --sidebar-background: 220 42% 6%;
+    --sidebar-foreground: 180 100% 95%;
+    --sidebar-primary: 180 85% 50%;
+    --sidebar-primary-foreground: 220 45% 4%;
+    --sidebar-accent: 220 35% 12%;
+    --sidebar-accent-foreground: 180 85% 50%;
+    --sidebar-border: 180 85% 50% / 0.15;
+    --sidebar-ring: 180 85% 50%;
+
+    /* Custom gradients */
+    --gradient-primary: linear-gradient(135deg, hsl(180 85% 50%) 0%, hsl(200 85% 55%) 100%);
+    --gradient-secondary: linear-gradient(135deg, hsl(45 100% 60%) 0%, hsl(35 100% 55%) 100%);
+    --gradient-accent: linear-gradient(135deg, hsl(160 84% 39%) 0%, hsl(150 84% 45%) 100%);
+    --gradient-danger: linear-gradient(135deg, hsl(0 84% 60%) 0%, hsl(15 90% 55%) 100%);
+    
+    /* Glows */
+    --glow-primary: 0 0 20px hsl(180 85% 50% / 0.5);
+    --glow-secondary: 0 0 20px hsl(45 100% 60% / 0.5);
+    --glow-accent: 0 0 20px hsl(160 84% 39% / 0.5);
+    
+    /* Transitions */
+    --transition-smooth: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+  }
+}
