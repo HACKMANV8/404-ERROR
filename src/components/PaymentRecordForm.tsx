@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { recordUPIPayment } from "@/lib/api";
-import { Plus, Loader2, CheckCircle, AlertCircle, RefreshCw } from "lucide-react";
+import { Plus, Loader2, CheckCircle, AlertCircle, RefreshCw, Upload, X } from "lucide-react";
 import { toast } from "sonner";
 import {
   Select,
@@ -30,6 +30,8 @@ const PaymentRecordForm = ({ onSuccess }: PaymentRecordFormProps) => {
     region: "",
     description: "",
   });
+  const [screenshot, setScreenshot] = useState<File | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
 
   const mutation = useMutation({
     mutationFn: recordUPIPayment,
@@ -60,6 +62,8 @@ const PaymentRecordForm = ({ onSuccess }: PaymentRecordFormProps) => {
         region: "",
         description: "",
       });
+      setScreenshot(null);
+      setScreenshotPreview(null);
 
       // Add transaction optimistically to cache (will show immediately)
       queryClient.setQueryData(['transactions'], (oldData: any) => {
@@ -89,11 +93,54 @@ const PaymentRecordForm = ({ onSuccess }: PaymentRecordFormProps) => {
       }
     },
     onError: (error: Error) => {
-      toast.error("Failed to record payment", {
-        description: error.message,
-      });
+      // Handle specific UTR mismatch error
+      if (error.message.includes("UTR numbers don't match") || error.message.includes("don't match")) {
+        toast.error("UTR Verification Failed", {
+          description: error.message,
+          duration: 8000,
+        });
+      } else {
+        toast.error("Failed to record payment", {
+          description: error.message,
+        });
+      }
     },
   });
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        toast.error("Invalid file type", {
+          description: "Please upload an image file (PNG, JPG, etc.)",
+        });
+        return;
+      }
+
+      // Validate file size (10MB max)
+      if (file.size > 10 * 1024 * 1024) {
+        toast.error("File too large", {
+          description: "Please upload an image smaller than 10MB",
+        });
+        return;
+      }
+
+      setScreenshot(file);
+
+      // Create preview
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setScreenshotPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleRemoveScreenshot = () => {
+    setScreenshot(null);
+    setScreenshotPreview(null);
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -112,6 +159,7 @@ const PaymentRecordForm = ({ onSuccess }: PaymentRecordFormProps) => {
       donorPhone: formData.donorPhone || undefined,
       region: formData.region || undefined,
       description: formData.description || undefined,
+      screenshot: screenshot || undefined,
     });
   };
 
@@ -230,6 +278,69 @@ const PaymentRecordForm = ({ onSuccess }: PaymentRecordFormProps) => {
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
             rows={3}
           />
+        </div>
+
+        {/* Screenshot Upload */}
+        <div>
+          <Label htmlFor="screenshot">
+            UPI Payment Screenshot <span className="text-muted-foreground text-sm font-normal">(to verify UTR)</span>
+          </Label>
+          {!screenshot ? (
+            <div className="mt-2">
+              <label
+                htmlFor="screenshot-input"
+                className="flex flex-col items-center justify-center w-full h-32 border-2 border-dashed border-accent/30 rounded-lg cursor-pointer hover:border-accent/50 transition-colors"
+              >
+                <div className="flex flex-col items-center justify-center pt-5 pb-6">
+                  <Upload className="w-8 h-8 mb-2 text-accent/50" />
+                  <p className="mb-2 text-sm text-muted-foreground">
+                    <span className="font-semibold">Click to upload</span> or drag and drop
+                  </p>
+                  <p className="text-xs text-muted-foreground">PNG, JPG up to 10MB</p>
+                  <p className="text-xs text-accent mt-1">Upload UPI payment confirmation screenshot</p>
+                </div>
+                <input
+                  id="screenshot-input"
+                  type="file"
+                  className="hidden"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                />
+              </label>
+            </div>
+          ) : (
+            <div className="mt-2 relative">
+              <div className="border border-accent/30 rounded-lg p-2 bg-accent/5">
+                <div className="flex items-center gap-3">
+                  {screenshotPreview && (
+                    <img
+                      src={screenshotPreview}
+                      alt="Screenshot preview"
+                      className="w-16 h-16 object-cover rounded"
+                    />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium truncate">{screenshot.name}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {(screenshot.size / 1024).toFixed(1)} KB
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleRemoveScreenshot}
+                    className="text-destructive hover:text-destructive"
+                  >
+                    <X className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Screenshot will be used to verify UTR number matches your entered UPI Reference
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Submit Button */}

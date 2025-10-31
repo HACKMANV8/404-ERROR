@@ -197,6 +197,7 @@ export interface RecordUPIPaymentRequest {
   region?: string;
   description?: string;
   sendToBlockchain?: boolean;
+  screenshot?: File;
 }
 
 export interface RecordUPIPaymentResponse {
@@ -208,12 +209,29 @@ export interface RecordUPIPaymentResponse {
 export async function recordUPIPayment(
   payment: RecordUPIPaymentRequest
 ): Promise<RecordUPIPaymentResponse> {
+  // If screenshot is provided, use FormData; otherwise use JSON
+  const formData = new FormData();
+  
+  formData.append('amount', payment.amount.toString());
+  formData.append('upiReference', payment.upiReference);
+  
+  if (payment.donorName) formData.append('donorName', payment.donorName);
+  if (payment.donorPhone) formData.append('donorPhone', payment.donorPhone);
+  if (payment.region) formData.append('region', payment.region);
+  if (payment.description) formData.append('description', payment.description);
+  if (payment.sendToBlockchain !== undefined) {
+    formData.append('sendToBlockchain', payment.sendToBlockchain.toString());
+  }
+  
+  // Add screenshot if provided
+  if (payment.screenshot) {
+    formData.append('screenshot', payment.screenshot);
+  }
+
   const response = await fetch(`${API_BASE_URL}/api/payments/record-upi`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(payment),
+    // Don't set Content-Type header - browser will set it automatically with boundary for FormData
+    body: formData,
   });
 
   if (!response.ok) {

@@ -1,8 +1,10 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import multer from 'multer';
 import { AIPredictionService } from './services/aiPredictionService.js';
 import { BlockchainService } from './services/blockchainService.js';
+import { OCRService } from './services/ocrService.js';
 import { DISASTER_REGIONS } from './config/regions.js';
 import type { Region } from './types/index.js';
 import { connectToDatabase } from './config/database.js';
@@ -30,9 +32,26 @@ app.use(cors({
 }));
 app.use(express.json());
 
+// Multer configuration for file uploads (in-memory storage)
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 10 * 1024 * 1024, // 10MB limit
+  },
+  fileFilter: (req, file, cb) => {
+    // Accept images only
+    if (file.mimetype.startsWith('image/')) {
+      cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed'));
+    }
+  },
+});
+
 // Services
 const aiPredictionService = new AIPredictionService();
 const blockchainService = new BlockchainService();
+const ocrService = new OCRService();
 
 // Cache for predictions (update every 30 seconds)
 let cachedPredictions: {
@@ -219,13 +238,15 @@ app.get('/api/payments/options', async (req: Request, res: Response) => {
 
 /**
  * Record UPI payment as blockchain transaction
- * This is called when a UPI payment is verified/received
+ * This endpoint now accepts FormData with screenshot for UTR verification
  */
-app.post('/api/payments/record-upi', async (req: Request, res: Response) => {
+app.post('/api/payments/record-upi', upload.single('screenshot'), async (req: Request, res: Response) => {
   try {
-    console.log('[API] 📥 Received UPI payment recording request:', req.body);
+    console.log('[API] 📥 Received UPI payment recording request');
     
+    // Extract form data from multipart form
     const { amount, upiReference, donorName, donorPhone, region, description, sendToBlockchain } = req.body;
+    const screenshot = req.file;
 
     // Validate required fields
     if (!amount || !upiReference) {
@@ -235,9 +256,60 @@ app.post('/api/payments/record-upi', async (req: Request, res: Response) => {
       });
     }
 
+    // If screenshot is provided, verify UTR matches
+    if (screenshot) {
+      console.log('[API] 📸 Screenshot provided, extracting UTR for verification...');
+      console.log('[API] Screenshot details:', {
+        filename: screenshot.originalname,
+        mimetype: screenshot.mimetype,
+        size: screenshot.size,
+      });
+
+      try {
+        // Extract UTR from screenshot using OCR
+        const extractedUTR = await ocrService.extractUTRFromImage(screenshot.buffer);
+        
+        if (!extractedUTR) {
+          console.error('[API] ❌ Could not extract UTR from screenshot');
+          return res.status(400).json({
+            error: 'Could not extract UTR number from the screenshot. Please ensure the screenshot is clear and contains the UPI payment confirmation.',
+          });
+        }
+
+        console.log('[API] ✅ Extracted UTR from screenshot:', extractedUTR);
+        console.log('[API] 📝 Manually entered UPI Reference:', upiReference);
+
+        // Compare extracted UTR with manually entered UPI Reference
+        const utrMatches = ocrService.compareUTR(extractedUTR, upiReference);
+
+        if (!utrMatches) {
+          console.error('[API] ❌ UTR mismatch detected!');
+          console.error('[API] Extracted UTR:', extractedUTR);
+          console.error('[API] Entered UPI Reference:', upiReference);
+          return res.status(400).json({
+            error: 'UTR numbers don\'t match. Please verify and try again.',
+            details: {
+              extractedUTR: extractedUTR,
+              enteredUPIReference: upiReference,
+            },
+          });
+        }
+
+        console.log('[API] ✅ UTR verification passed! Proceeding with transaction...');
+      } catch (ocrError: any) {
+        console.error('[API] ❌ OCR processing error:', ocrError.message);
+        return res.status(500).json({
+          error: 'Failed to process screenshot. Please try again or ensure the image is clear.',
+          details: process.env.NODE_ENV === 'development' ? ocrError.message : undefined,
+        });
+      }
+    } else {
+      console.log('[API] ⚠️ No screenshot provided - skipping UTR verification');
+    }
+
     console.log('[API] ✅ Validating UPI payment:', { amount, upiReference, donorName, region });
 
-    // Record UPI payment as blockchain transaction
+    // Record UPI payment as blockchain transaction (already signs with private key)
     console.log('[API] 📝 Calling blockchainService.recordUPIPayment...');
     const blockchainTx = await blockchainService.recordUPIPayment({
       amount: parseFloat(amount),
