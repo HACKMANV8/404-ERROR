@@ -59,6 +59,16 @@ export interface TransactionResponse {
   totalAid: string;
   smartContracts: number;
   avgProcessingTime: string;
+  walletAddress?: string | null;
+  walletBalance?: string;
+  isRealBlockchain?: boolean;
+}
+
+export interface WalletInfo {
+  address: string | null;
+  balance: string;
+  network: string;
+  isConnected: boolean;
 }
 
 /**
@@ -105,5 +115,66 @@ export async function healthCheck(): Promise<{ status: string; timestamp: string
   if (!response.ok) {
     throw new Error('API server is not responding');
   }
+  return response.json();
+}
+
+/**
+ * Get wallet information and address
+ */
+export async function fetchWalletInfo(): Promise<WalletInfo> {
+  const response = await fetch(`${API_BASE_URL}/api/blockchain/wallet`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch wallet info');
+  }
+
+  return response.json();
+}
+
+/**
+ * Payment options interface
+ */
+export interface PaymentOptions {
+  upi: {
+    id: string | null;
+    qrCode: string | null;
+    available: boolean;
+  };
+  bankAccount: {
+    available: boolean;
+    accountNumber?: string;
+    ifsc?: string;
+    bankName?: string;
+    accountHolderName?: string;
+    accountType?: string;
+  };
+  razorpay: {
+    available: boolean;
+  };
+  stripe: {
+    available: boolean;
+  };
+}
+
+/**
+ * Get payment options (UPI, Bank details, etc.)
+ */
+export async function fetchPaymentOptions(): Promise<PaymentOptions> {
+  const response = await fetch(`${API_BASE_URL}/api/payments/options`, {
+    method: 'GET',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to fetch payment options');
+  }
+
   return response.json();
 }

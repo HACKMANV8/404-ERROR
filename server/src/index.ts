@@ -79,9 +79,9 @@ app.get('/api/predictions', async (req: Request, res: Response) => {
 /**
  * Get blockchain transactions
  */
-app.get('/api/transactions', (req: Request, res: Response) => {
+app.get('/api/transactions', async (req: Request, res: Response) => {
   try {
-    const response = blockchainService.getTransactions();
+    const response = await blockchainService.getTransactions();
     res.json(response);
   } catch (error) {
     console.error('Error fetching transactions:', error);
@@ -98,6 +98,103 @@ app.get('/api/health', (req: Request, res: Response) => {
     timestamp: new Date().toISOString(),
     service: 'ResQ Ledger API',
   });
+});
+
+/**
+ * Get wallet address and QR code for donations
+ */
+app.get('/api/blockchain/wallet', async (req: Request, res: Response) => {
+  try {
+    const polygonService = blockchainService.getPolygonService();
+    const walletAddress = polygonService.getWalletAddress();
+    const balance = await polygonService.getBalance();
+    
+    res.json({
+      address: walletAddress,
+      balance: balance,
+      network: 'Polygon Amoy (Testnet)',
+      isConnected: blockchainService.isConnected(),
+    });
+  } catch (error) {
+    console.error('Error getting wallet info:', error);
+    res.status(500).json({ error: 'Failed to get wallet info' });
+  }
+});
+
+/**
+ * Create payment order (Payment Gateway)
+ */
+app.post('/api/payments/create', async (req: Request, res: Response) => {
+  try {
+    const { amount, currency, region, donorName, donorEmail, description } = req.body;
+    
+    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const payment = await paymentGateway.createPayment({
+      amount,
+      currency: currency || 'INR',
+      region,
+      donorName,
+      donorEmail,
+      description,
+    });
+    
+    res.json(payment);
+  } catch (error: any) {
+    console.error('Error creating payment:', error);
+    res.status(500).json({ error: error.message || 'Failed to create payment' });
+  }
+});
+
+/**
+ * Verify payment status
+ */
+app.post('/api/payments/verify', async (req: Request, res: Response) => {
+  try {
+    const { paymentId, gateway } = req.body;
+    
+    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const payment = await paymentGateway.verifyPayment(paymentId, gateway);
+    
+    res.json(payment);
+  } catch (error: any) {
+    console.error('Error verifying payment:', error);
+    res.status(500).json({ error: error.message || 'Failed to verify payment' });
+  }
+});
+
+/**
+ * Get payment options (UPI, Bank details, etc.)
+ */
+app.get('/api/payments/options', async (req: Request, res: Response) => {
+  try {
+    const paymentGateway = blockchainService.getPaymentGatewayService();
+    const upiId = paymentGateway.getUPIId();
+    const bankAccount = paymentGateway.getBankAccount();
+    
+    // Generate UPI QR code data
+    const upiQRCode = upiId ? paymentGateway.generateUPIQR() : null;
+    
+    res.json({
+      upi: {
+        id: upiId,
+        qrCode: upiQRCode,
+        available: !!upiId,
+      },
+      bankAccount: {
+        ...bankAccount,
+        available: !!(bankAccount.accountNumber && bankAccount.ifsc),
+      },
+      razorpay: {
+        available: !!(process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET),
+      },
+      stripe: {
+        available: !!process.env.STRIPE_SECRET_KEY,
+      },
+    });
+  } catch (error: any) {
+    console.error('Error getting payment options:', error);
+    res.status(500).json({ error: error.message || 'Failed to get payment options' });
+  }
 });
 
 // Start server
@@ -130,7 +227,9 @@ setInterval(async () => {
   }
 }, 30000); // Update every 30 seconds
 
-// Simulate new blockchain transactions
+// Simulate new blockchain transactions (only if not using real blockchain)
 setInterval(() => {
-  blockchainService.generateSimulatedTransaction();
+  if (!blockchainService.isConnected()) {
+    blockchainService.generateSimulatedTransaction();
+  }
 }, 10000); // Every 10 seconds

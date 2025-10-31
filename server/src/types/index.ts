@@ -116,4 +116,7 @@ export interface TransactionResponse {
   totalAid: string;
   smartContracts: number;
   avgProcessingTime: string;
+  walletAddress?: string | null;
+  walletBalance?: string;
+  isRealBlockchain?: boolean;
 }

@@ -5,8 +5,9 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import ParticleField from "@/components/ParticleField";
-import { fetchTransactions, type BlockchainTransaction } from "@/lib/api";
-import { Activity, CheckCircle, Clock, ExternalLink, Shield, RefreshCw } from "lucide-react";
+import { fetchTransactions, fetchWalletInfo, fetchPaymentOptions, type BlockchainTransaction } from "@/lib/api";
+import { Activity, CheckCircle, Clock, ExternalLink, Shield, RefreshCw, QrCode, Wallet, Copy, Check, IndianRupee, Smartphone } from "lucide-react";
+import { QRCodeSVG } from "qrcode.react";
 
 const Blockchain = () => {
   const { data: transactionData, isLoading } = useQuery({
@@ -16,7 +17,22 @@ const Blockchain = () => {
     staleTime: 9000,
   });
 
+  const { data: walletInfo } = useQuery({
+    queryKey: ['wallet'],
+    queryFn: fetchWalletInfo,
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
+
+  const { data: paymentOptions } = useQuery({
+    queryKey: ['paymentOptions'],
+    queryFn: fetchPaymentOptions,
+    refetchInterval: 60000, // Refetch every minute
+  });
+
   const [showAll, setShowAll] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [showQR, setShowQR] = useState(false);
+  const [copiedUPI, setCopiedUPI] = useState(false);
 
   const transactions: BlockchainTransaction[] = transactionData?.transactions || [];
   const displayedTransactions = showAll ? transactions : transactions.slice(0, 10);
@@ -28,6 +44,35 @@ const Blockchain = () => {
     } catch {
       return timestamp;
     }
+  };
+
+  const getPolygonScanUrl = (txHash: string) => {
+    return `https://amoy.polygonscan.com/tx/${txHash}`;
+  };
+
+  const copyToClipboard = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
+  const copyUPIId = async (upiId: string) => {
+    try {
+      await navigator.clipboard.writeText(upiId);
+      setCopiedUPI(true);
+      setTimeout(() => setCopiedUPI(false), 2000);
+    } catch (err) {
+      console.error('Failed to copy UPI ID:', err);
+    }
+  };
+
+  const truncateHash = (hash: string) => {
+    if (hash.length <= 16) return hash;
+    return `${hash.substring(0, 10)}...${hash.substring(hash.length - 6)}`;
   };
 
   const stats = transactionData ? [
@@ -76,6 +121,136 @@ const Blockchain = () => {
             Every transaction verified and secured on the blockchain ledger
           </p>
         </div>
+
+        {/* Wallet Info & QR Code Section */}
+        {walletInfo && walletInfo.isConnected && walletInfo.address && (
+          <Card className="p-6 border-accent/30 bg-gradient-to-r from-card to-accent/5 mb-8">
+            <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
+              <div className="flex-1">
+                <div className="flex items-center gap-3 mb-2">
+                  <Wallet className="w-6 h-6 text-accent" />
+                  <h3 className="text-xl font-semibold">Donation Wallet</h3>
+                  <Badge className="bg-accent/20 text-accent border-accent/30">
+                    {walletInfo.network}
+                  </Badge>
+                </div>
+                <p className="text-sm text-muted-foreground mb-3">
+                  Send donations directly to this wallet address on Polygon Amoy
+                </p>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1 p-3 rounded-lg bg-muted/50 border border-border/50 font-mono text-sm break-all">
+                    {walletInfo.address}
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => copyToClipboard(walletInfo.address || '')}
+                    className="flex-shrink-0"
+                  >
+                    {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setShowQR(!showQR)}
+                    className="flex-shrink-0"
+                  >
+                    <QrCode className="w-4 h-4" />
+                  </Button>
+                </div>
+                {walletInfo.balance && (
+                  <p className="text-sm text-muted-foreground mt-2">
+                    Current Balance: <span className="font-semibold text-foreground">{walletInfo.balance} MATIC</span>
+                  </p>
+                )}
+              </div>
+              {showQR && walletInfo.address && (
+                <div className="p-4 bg-white rounded-lg border-2 border-accent">
+                  <QRCodeSVG value={walletInfo.address} size={200} level="M" />
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {/* UPI Payment Section */}
+        {paymentOptions?.upi.available && (
+          <Card className="p-6 border-accent/30 bg-gradient-to-r from-accent/5 to-card mb-8">
+            <div className="flex items-center gap-3 mb-4">
+              <Smartphone className="w-6 h-6 text-accent" />
+              <h3 className="text-xl font-semibold">Donate via UPI</h3>
+              <Badge className="bg-accent/20 text-accent border-accent/30">Instant</Badge>
+            </div>
+            <p className="text-sm text-muted-foreground mb-4">
+              Scan the QR code or enter the UPI ID to make a donation
+            </p>
+            <div className="flex flex-col md:flex-row gap-6 items-start md:items-center">
+              {/* QR Code */}
+              <div className="flex-shrink-0">
+                <div className="p-4 bg-white rounded-lg border-2 border-accent shadow-lg">
+                  {paymentOptions.upi.qrCode ? (
+                    <QRCodeSVG 
+                      value={paymentOptions.upi.qrCode} 
+                      size={200} 
+                      level="M"
+                      includeMargin={true}
+                    />
+                  ) : paymentOptions.upi.id ? (
+                    <QRCodeSVG 
+                      value={`upi://pay?pa=${paymentOptions.upi.id}&pn=ResQ%20Ledger&cu=INR`} 
+                      size={200} 
+                      level="M"
+                      includeMargin={true}
+                    />
+                  ) : null}
+                </div>
+                <p className="text-xs text-center text-muted-foreground mt-2">
+                  Scan with any UPI app
+                </p>
+              </div>
+              
+              {/* UPI ID */}
+              <div className="flex-1">
+                <div className="mb-3">
+                  <p className="text-xs text-muted-foreground mb-2">UPI ID</p>
+                  <div className="flex items-center gap-2">
+                    <div className="flex-1 p-3 rounded-lg bg-muted/50 border border-border/50 font-mono text-sm break-all">
+                      {paymentOptions.upi.id || 'Not configured'}
+                    </div>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => paymentOptions.upi.id && copyUPIId(paymentOptions.upi.id)}
+                      className="flex-shrink-0"
+                      disabled={!paymentOptions.upi.id}
+                    >
+                      {copiedUPI ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <IndianRupee className="w-4 h-4" />
+                  <span>Supported: PhonePe, Google Pay, Paytm, BHIM, and all UPI apps</span>
+                </div>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {/* Real Blockchain Status Badge */}
+        {transactionData?.isRealBlockchain === false && (
+          <Card className="p-4 border-secondary/30 bg-secondary/10 mb-6">
+            <div className="flex items-center gap-3">
+              <Clock className="w-5 h-5 text-secondary" />
+              <div className="flex-1">
+                <p className="text-sm font-medium">Using Simulated Data</p>
+                <p className="text-xs text-muted-foreground">
+                  Add POLYGON_PRIVATE_KEY to server/.env to connect to real Polygon Amoy blockchain
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
 
         {/* Stats Grid */}
         <div className="grid md:grid-cols-4 gap-6 mb-8">
@@ -196,9 +371,18 @@ const Blockchain = () => {
                   
                   <div className="md:text-right space-y-2">
                     <p className="text-xs text-muted-foreground">{formatTimestamp(tx.timestamp)}</p>
+                    {tx.blockNumber && (
+                      <p className="text-xs text-muted-foreground">Block #{tx.blockNumber}</p>
+                    )}
                     <div className="flex items-center gap-2 md:justify-end">
-                      <span className="font-mono text-xs text-muted-foreground">{tx.hash}</span>
-                      <Button variant="ghost" size="icon" className="h-8 w-8">
+                      <span className="font-mono text-xs text-muted-foreground">{truncateHash(tx.hash)}</span>
+                      <Button 
+                        variant="ghost" 
+                        size="icon" 
+                        className="h-8 w-8"
+                        onClick={() => window.open(getPolygonScanUrl(tx.hash), '_blank')}
+                        title="View on PolygonScan"
+                      >
                         <ExternalLink className="w-4 h-4" />
                       </Button>
                     </div>
