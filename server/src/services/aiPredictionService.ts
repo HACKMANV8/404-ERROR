@@ -188,13 +188,13 @@ export class AIPredictionService {
     
     // Base weights for core metrics
     const baseWeights = {
-      weather: 0.25,
-      satellite: 0.25,
-      social: 0.10,
+      weather: 0.20,  // Reduced from 0.25 to make room for increased social weight
+      satellite: 0.20, // Reduced from 0.25 to make room for increased social weight
+      social: 0.25,   // Increased from 0.10 to 0.25 (25%)
     };
     
     // Special risk weights (divided among active risks)
-    const specialRiskWeight = activeRisks > 0 ? 0.40 / activeRisks : 0;
+    const specialRiskWeight = activeRisks > 0 ? 0.35 / activeRisks : 0;
     
     // Distribute weights dynamically
     const weights = {
@@ -209,9 +209,9 @@ export class AIPredictionService {
     
     // If no special risks, redistribute weights to core metrics
     if (activeRisks === 0) {
-      weights.weather = 0.40;
-      weights.satellite = 0.40;
-      weights.social = 0.20;
+      weights.weather = 0.35;   // Adjusted to accommodate increased social weight
+      weights.satellite = 0.35; // Adjusted to accommodate increased social weight
+      weights.social = 0.30;    // Increased from 0.20 to 0.30 (30% when no special risks)
     }
 
     return (

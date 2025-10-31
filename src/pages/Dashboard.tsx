@@ -31,6 +31,7 @@ const Dashboard = () => {
   });
 
   const [lastUpdated, setLastUpdated] = useState(new Date().toLocaleTimeString());
+  const [showFullList, setShowFullList] = useState(false);
 
   // Map AI metrics to icons
   const getMetricIcon = (name: string) => {
@@ -61,6 +62,12 @@ const Dashboard = () => {
   })) || [];
 
   const regions: Region[] = predictions?.regions || [];
+  
+  // Sort regions by severity (highest first)
+  const sortedRegions = [...regions].sort((a, b) => b.severity - a.severity);
+  
+  // Show top 4 by default, all if showFullList is true
+  const displayedRegions = showFullList ? sortedRegions : sortedRegions.slice(0, 4);
 
   const getSeverityColor = (severity: number) => {
     if (severity >= 80) return "bg-destructive";
@@ -191,7 +198,7 @@ const Dashboard = () => {
               ) : regions.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-4">No regions data available</p>
               ) : (
-                regions.map((region, index) => (
+                displayedRegions.map((region, index) => (
                 <div 
                   key={region.name} 
                   className="p-4 rounded-lg bg-gradient-to-r from-muted/30 to-muted/10 border border-border/30 hover:border-primary/30 transition-all animate-fade-in"
@@ -228,6 +235,17 @@ const Dashboard = () => {
                 ))
               )}
             </div>
+
+            {/* View Full List Button - only show if there are more than 4 regions */}
+            {!isLoading && regions.length > 4 && (
+              <Button 
+                variant="outline" 
+                className="w-full mt-4"
+                onClick={() => setShowFullList(!showFullList)}
+              >
+                {showFullList ? 'Show Less' : 'View Full List'}
+              </Button>
+            )}
 
             <Link to="/blockchain" className="block mt-6">
               <Button variant="outline" className="w-full">
